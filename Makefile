@@ -21,7 +21,7 @@ CGO_ENABLED=0
 export GOROOT GO111MODULE CGO_ENABLED
 
 build:
-	go build -v -o "$(OUT_DIR)/$(BINARY_NAME)" .
+	go build -v -o "$(OUT_DIR)/$(BINARY_NAME)" ./cmd
 
 clean:
 	rm -rf "$(OUT_DIR)/"

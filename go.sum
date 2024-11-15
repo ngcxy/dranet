@@ -1,5 +1,5 @@
-cloud.google.com/go/compute/metadata v0.3.0 h1:Tz+eQXMEqDIKRsmY3cHTL6FVaynIjX2QxYC4trgAKZc=
-cloud.google.com/go/compute/metadata v0.3.0/go.mod h1:zFmK7XCadkQkj6TtorcaGlCW1hT1fIilQDwofLpJ20k=
+cloud.google.com/go/compute/metadata v0.5.2 h1:UxK4uu/Tn+I3p2dYWTfiX4wva7aYlKixAHn3fyqngqo=
+cloud.google.com/go/compute/metadata v0.5.2/go.mod h1:C66sj2AluDcIqakBq/M8lw8/ybHgOZqin2obFxa/E5k=
 github.com/Mellanox/rdmamap v1.1.0 h1:A/W1wAXw+6vm58f3VklrIylgV+eDJlPVIMaIKuxgUT4=
 github.com/Mellanox/rdmamap v1.1.0/go.mod h1:fN+/V9lf10ABnDCwTaXRjeeWijLt2iVLETnK+sx/LY8=
 github.com/containerd/log v0.1.0 h1:TCJt7ioM2cr/tfR8GPbGf9/VRAX8D2B4PjzCpfX540I=
@@ -175,6 +175,8 @@ k8s.io/apimachinery v0.31.2 h1:i4vUt2hPK56W6mlT7Ry+AO8eEsyxMD1U44NR22CLTYw=
 k8s.io/apimachinery v0.31.2/go.mod h1:rsPdaZJfTfLsNJSQzNHQvYoTmxhoOEofxtOsF3rtsMo=
 k8s.io/client-go v0.31.2 h1:Y2F4dxU5d3AQj+ybwSMqQnpZH9F30//1ObxOKlTI9yc=
 k8s.io/client-go v0.31.2/go.mod h1:NPa74jSVR/+eez2dFsEIHNa+3o09vtNaWwWwb1qSxSs=
+k8s.io/component-helpers v0.31.2 h1:V2yjoNeyg8WfvwrJwzfYz+RUwjlbcAIaDaHEStBbaZM=
+k8s.io/component-helpers v0.31.2/go.mod h1:cNz+1ck38R0qWrjcw/rhQgGP6+Gwgw8ngr2ziDNmSXM=
 k8s.io/cri-api v0.31.2 h1:O/weUnSHvM59nTio0unxIUFyRHMRKkYn96YDILSQKmo=
 k8s.io/cri-api v0.31.2/go.mod h1:Po3TMAYH/+KrZabi7QiwQI4a692oZcUOUThd/rqwxrI=
 k8s.io/dynamic-resource-allocation v0.31.2 h1:zJWogzySxVrJnGvV3yyspKHzgUieNzrPpLkTSFj+D1Q=

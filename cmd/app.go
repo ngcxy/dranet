@@ -24,10 +24,13 @@ import (
 	"os/signal"
 
 	"github.com/GoogleCloudPlatform/dranet/pkg/driver"
+
 	"golang.org/x/sys/unix"
+
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	nodeutil "k8s.io/component-helpers/node/util"
 	"k8s.io/klog/v2"
 )
 
@@ -50,7 +53,7 @@ func init() {
 	}
 }
 
-func main() int {
+func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
 
@@ -100,8 +103,7 @@ func main() int {
 
 	dranet, err := driver.Start(ctx, driverName, clientset, nodeName)
 	if err != nil {
-		klog.Infof("driver failed to start: %v", err)
-		return 1
+		klog.Fatalf("driver failed to start: %v", err)
 	}
 	defer dranet.Stop()
 	klog.Info("driver started")
@@ -113,5 +115,4 @@ func main() int {
 	case <-ctx.Done():
 	}
 
-	return 0
 }

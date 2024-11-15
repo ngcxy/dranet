@@ -18,7 +18,6 @@ package driver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -27,7 +26,6 @@ import (
 	"sync"
 	"time"
 
-	"cloud.google.com/go/compute/metadata"
 	"github.com/Mellanox/rdmamap"
 	"github.com/containerd/nri/pkg/api"
 	"github.com/containerd/nri/pkg/stub"
@@ -188,12 +186,10 @@ func (np *NetworkDriver) RunPodSandbox(ctx context.Context, pod *api.PodSandbox)
 	}
 
 	// get the pod network namespace
-	var ns string
-	for _, namespace := range pod.Linux.GetNamespaces() {
-		if namespace.Type == "network" {
-			ns = namespace.Path
-			break
-		}
+	ns := getNetworkNamespace(pod)
+	// host network pods are skipped
+	if ns == "" {
+		return nil
 	}
 	// host network pods are skipped
 	if ns == "" {
@@ -201,7 +197,25 @@ func (np *NetworkDriver) RunPodSandbox(ctx context.Context, pod *api.PodSandbox)
 		return nil
 	}
 
-	return podStartHook(ctx, ns, allocation)
+	// Process the configurations of the ResourceClaim
+	for _, config := range allocation.Devices.Config {
+		if config.Opaque == nil {
+			continue
+		}
+		klog.V(4).Infof("podStartHook Configuration %s", config.Opaque.Parameters.String())
+		// TODO get config options here, it can add ips or commands
+		// to add routes, run dhcp, rename the interface ... whatever
+	}
+	// Process the configurations of the ResourceClaim
+	for _, result := range allocation.Devices.Results {
+		if result.Driver != np.driverName {
+			continue
+		}
+		// TODO see https://github.com/containernetworking/plugins/tree/main/plugins/main
+		// for better examples of low level implementations using netlink for more complex
+		// scenarios like host-device, ipvlan, macvlan, ...
+	}
+	return nil
 }
 
 func (np *NetworkDriver) StopPodSandbox(ctx context.Context, pod *api.PodSandbox) error {
@@ -214,27 +228,30 @@ func (np *NetworkDriver) StopPodSandbox(ctx context.Context, pod *api.PodSandbox
 	defer np.podAllocations.Remove(types.UID(pod.Uid))
 
 	// get the pod network namespace
-	var ns string
-	for _, namespace := range pod.Linux.GetNamespaces() {
-		if namespace.Type == "network" {
-			ns = namespace.Path
-			break
-		}
-	}
+	ns := getNetworkNamespace(pod)
 	// host network pods are skipped
 	if ns == "" {
 		return nil
 	}
 
-	return podStopHook(ctx, ns, allocation)
-}
-
-type gceNetworkInterface struct {
-	IPv4    string   `json:"ip,omitempty"`
-	IPv6    []string `json:"ipv6,omitempty"`
-	Mac     string   `json:"mac,omitempty"`
-	MTU     int      `json:"mtu,omitempty"`
-	Network string   `json:"network,omitempty"`
+	for _, config := range allocation.Devices.Config {
+		if config.Opaque == nil {
+			continue
+		}
+		klog.V(4).Infof("podStopHook Configuration %s", config.Opaque.Parameters.String())
+		// TODO get config options here, it can add ips or commands
+		// to add routes, run dhcp, rename the interface ... whatever
+	}
+	// Process the configurations of the ResourceClaim
+	for _, result := range allocation.Devices.Results {
+		if result.Driver != np.driverName {
+			continue
+		}
+		klog.V(4).Infof("podStopHook Device %s", result.Device)
+		// TODO get config options here, it can add ips or commands
+		// to add routes, run dhcp, rename the interface ... whatever
+	}
+	return nil
 }
 
 func (np *NetworkDriver) PublishResources(ctx context.Context) {
@@ -252,40 +269,10 @@ func (np *NetworkDriver) PublishResources(ctx context.Context) {
 		klog.Error(err, "error subscribing to netlink interfaces, only syncing periodically", "interval", maxInterval.String())
 	}
 
-	// Get google compute instance metadata for network interfaces
-	// https://cloud.google.com/compute/docs/metadata/predefined-metadata-keys
-	var gceInterfaces []gceNetworkInterface
-	if metadata.OnGCE() {
-		instanceName, err := metadata.InstanceNameWithContext(ctx)
-		if err != nil {
-			klog.Infof("could not get instance name on GCE .... skipping GCE network interface attributes: %v", err)
-		} else {
-			klog.Infof("Getting GCE network interface attributes for instance %s", instanceName)
-		}
-
-		// TODO Check accelerator type machines
-		instanceType, err := metadata.GetWithContext(ctx, "instance/machine-type")
-		if err != nil {
-			klog.Infof("could not get instance type on GCE .... skipping GCE network interface attributes: %v", err)
-		} else {
-			klog.Infof("Getting GCE accelerator attributes for instance type %s", instanceType)
-		}
-
-		//  curl "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/?recursive=true" -H "Metadata-Flavor: Google"
-		// [{"accessConfigs":[{"externalIp":"35.225.164.134","type":"ONE_TO_ONE_NAT"}],"dnsServers":["169.254.169.254"],"forwardedIps":[],"gateway":"10.128.0.1","ip":"10.128.0.70","ipAliases":["10.24.3.0/24"],"mac":"42:01:0a:80:00:46","mtu":1460,"network":"projects/628944397724/networks/default","subnetmask":"255.255.240.0","targetInstanceIps":[]},{"accessConfigs":[{"externalIp":"","type":"ONE_TO_ONE_NAT"}],"dnsServers":["169.254.169.254"],"forwardedIps":[],"gateway":"192.168.1.1","ip":"192.168.1.2","ipAliases":[],"mac":"42:01:c0:a8:01:02","mtu":8244,"network":"projects/628944397724/networks/aojea-dra-net-1","subnetmask":"255.255.255.0","targetInstanceIps":[]},{"accessConfigs":[{"externalIp":"","type":"ONE_TO_ONE_NAT"}],"dnsServers":["169.254.169.254"],"forwardedIps":[],"gateway":"192.168.2.1","ip":"192.168.2.2","ipAliases":[],"mac":"42:01:c0:a8:02:02","mtu":8244,"network":"projects/628944397724/networks/aojea-dra-net-2","subnetmask":"255.255.255.0","targetInstanceIps":[]},{"accessConfigs":[{"externalIp":"","type":"ONE_TO_ONE_NAT"}],"dnsServers":["169.254.169.254"],"forwardedIps":[],"gateway":"192.168.3.1","ip":"192.168.3.2","ipAliases":[],"mac":"42:01:c0:a8:03:02","mtu":8244,"network":"projects/628944397724/networks/aojea-dra-net-3","subnetmask":"255.255.255.0","targetInstanceIps":[]},{"accessConfigs":[{"externalIp":"","type":"ONE_TO_ONE_NAT"}],"dnsServers":["169.254.169.254"],"forwardedIps":[],"gateway":"192.168.4.1","ip":"192.168.4.2","ipAliases":[],"mac":"42:01:c0:a8:04:02","mtu":8244,"network":"projects/628944397724/networks/aojea-dra-net-4","subnetmask":"255.255.255.0","targetInstanceIps":[]}]
-		gceInterfacesRaw, err := metadata.GetWithContext(ctx, "instance/network-interfaces/?recursive=true&alt=json")
-		if err != nil {
-			klog.Infof("could not get network interfaces on GCE .... skipping GCE network interface attributes: %v", err)
-		} else {
-			klog.Infof("Getting GCE accelerator attributes for instance type %s", instanceType)
-			if err = json.Unmarshal([]byte(gceInterfacesRaw), &gceInterfaces); err != nil {
-				klog.Infof("could not get network interfaces on GCE .... skipping GCE network interface attributes: %v", err)
-			}
-		}
-	}
+	gceInterfaces := getInstanceNetworkInterfaces(ctx)
 
 	for {
-		err := rateLimiter.Wait(context.Background())
+		err := rateLimiter.Wait(ctx)
 		if err != nil {
 			klog.Error(err, "unexpected rate limited error trying to get system interfaces")
 		}
@@ -498,4 +485,14 @@ func (np *NetworkDriver) nodeUnprepareResource(ctx context.Context, claimReq *dr
 	klog.Infof("claim %s/%s with allocation %#v", claimReq.Namespace, claimReq.Name, allocation)
 	// TODO do unpreparing things
 	return nil
+}
+
+func getNetworkNamespace(pod *api.PodSandbox) string {
+	// get the pod network namespace
+	for _, namespace := range pod.Linux.GetNamespaces() {
+		if namespace.Type == "network" {
+			return namespace.Path
+		}
+	}
+	return ""
 }
