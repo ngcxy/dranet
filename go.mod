@@ -3,7 +3,7 @@ module github.com/google/dranet
 go 1.23.0
 
 require (
-	cloud.google.com/go/compute/metadata v0.5.2
+	cloud.google.com/go/compute/metadata v0.6.0
 	github.com/Mellanox/rdmamap v1.1.0
 	github.com/containerd/nri v0.9.0
 	github.com/vishvananda/netlink v1.3.0
