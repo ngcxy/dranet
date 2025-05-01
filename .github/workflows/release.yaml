@@ -27,6 +27,8 @@ jobs:
    publish:
     name: publish
     runs-on: ubuntu-latest
+    permissions:
+      packages: write
     timeout-minutes: 100
     
     steps:
