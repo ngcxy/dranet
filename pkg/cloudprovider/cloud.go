@@ -19,6 +19,7 @@ package cloudprovider
 type CloudInstance struct {
 	Name                string
 	Type                string
+	Provider            CloudProvider
 	AcceleratorProtocol string
 	Interfaces          []NetworkInterface
 }
@@ -30,3 +31,12 @@ type NetworkInterface struct {
 	MTU     int      `json:"mtu,omitempty"`
 	Network string   `json:"network,omitempty"`
 }
+
+// CloudProvider represents the type of cloud provider.
+type CloudProvider string
+
+const (
+	CloudProviderGCE   CloudProvider = "GCE"
+	CloudProviderAWS   CloudProvider = "AWS"
+	CloudProviderAzure CloudProvider = "Azure"
+)

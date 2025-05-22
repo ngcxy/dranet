@@ -19,6 +19,7 @@ package gce
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/google/dranet/pkg/cloudprovider"
+	resourceapi "k8s.io/api/resource/v1beta1"
 )
 
 // GPUDirectSupport represents the type of GPUDirect support for a given machine type.
@@ -57,6 +59,7 @@ var (
 	// GPUDirect-RDMA: one HPC VPC, one subnet per NIC, 8896MTU
 )
 
+// GetInstance retrieves GCE instance properties by querying the metadata server.
 func GetInstance(ctx context.Context) (*cloudprovider.CloudInstance, error) {
 	var instance *cloudprovider.CloudInstance
 	// metadata server can not be available during startup
@@ -84,6 +87,7 @@ func GetInstance(ctx context.Context) (*cloudprovider.CloudInstance, error) {
 		instance = &cloudprovider.CloudInstance{
 			Name:                instanceName,
 			Type:                instanceType,
+			Provider:            cloudprovider.CloudProviderGCE,
 			AcceleratorProtocol: string(protocol),
 		}
 		if err = json.Unmarshal([]byte(gceInterfacesRaw), &instance.Interfaces); err != nil {
@@ -96,4 +100,21 @@ func GetInstance(ctx context.Context) (*cloudprovider.CloudInstance, error) {
 		return nil, err
 	}
 	return instance, nil
+}
+
+// GetGCEAttributes fetches all attributes related to the provided GCP network.
+func GetGCEAttributes(network string) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute {
+	attributes := make(map[resourceapi.QualifiedName]resourceapi.DeviceAttribute)
+	var projectNumber int64
+	var name string
+	// Use custom parsing because the network path is
+	// different from the format expected by k8s-cloud-provider
+	_, err := fmt.Sscanf(network, "projects/%d/networks/%s", &projectNumber, &name)
+	if err != nil {
+		klog.Warningf("Error parsing network %q : %v", network, err)
+		return nil
+	}
+	attributes["gce.dra.net/networkName"] = resourceapi.DeviceAttribute{StringValue: &name}
+	attributes["gce.dra.net/networkProjectNumber"] = resourceapi.DeviceAttribute{IntValue: &projectNumber}
+	return attributes
 }

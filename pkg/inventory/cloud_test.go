@@ -17,90 +17,91 @@ limitations under the License.
 package inventory
 
 import (
+	"github.com/google/go-cmp/cmp"
 	"testing"
 
 	"github.com/google/dranet/pkg/cloudprovider"
+	resourceapi "k8s.io/api/resource/v1beta1"
+	"k8s.io/utils/ptr"
 )
 
-func Test_cloudNetwork(t *testing.T) {
-	type args struct {
+func TestGetProviderAttributes(t *testing.T) {
+	tests := []struct {
+		name     string
 		mac      string
 		instance *cloudprovider.CloudInstance
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
+		want     map[resourceapi.QualifiedName]resourceapi.DeviceAttribute
 	}{
 		{
-			name: "nil instance",
-			args: args{
-				mac:      "00:11:22:33:44:55",
-				instance: nil,
-			},
-			want: "",
+			name:     "nil instance",
+			mac:      "00:11:22:33:44:55",
+			instance: nil,
+			want:     nil,
 		},
 		{
-			name: "empty interfaces",
-			args: args{
-				mac: "00:11:22:33:44:55",
-				instance: &cloudprovider.CloudInstance{
-					Interfaces: []cloudprovider.NetworkInterface{},
+			name: "instance with no interfaces",
+			mac:  "00:11:22:33:44:55",
+			instance: &cloudprovider.CloudInstance{
+				Provider:   cloudprovider.CloudProviderGCE,
+				Interfaces: []cloudprovider.NetworkInterface{},
+			},
+			want: nil,
+		},
+		{
+			name: "MAC not found in instance interfaces",
+			mac:  "00:11:22:33:44:FF", // MAC that won't be found
+			instance: &cloudprovider.CloudInstance{
+				Provider: cloudprovider.CloudProviderGCE,
+				Interfaces: []cloudprovider.NetworkInterface{
+					{Mac: "00:11:22:33:44:55", Network: "projects/12345/networks/test-network"},
 				},
 			},
-			want: "",
+			want: nil,
 		},
 		{
-			name: "mac match",
-			args: args{
-				mac: "00:11:22:33:44:55",
-				instance: &cloudprovider.CloudInstance{
-					Interfaces: []cloudprovider.NetworkInterface{
-						{Mac: "aa:bb:cc:dd:ee:ff", Network: "/projects/proj1/global/networks/net1"},
-						{Mac: "00:11:22:33:44:55", Network: "/projects/proj2/global/networks/my-super-long-network-name-that-will-be-truncated-and-then-some-more"},
-					},
+			name: "GCE provider, MAC found, valid network",
+			mac:  "00:11:22:33:44:55",
+			instance: &cloudprovider.CloudInstance{
+				Provider: cloudprovider.CloudProviderGCE,
+				Interfaces: []cloudprovider.NetworkInterface{
+					{Mac: "00:11:22:33:44:55", Network: "projects/12345/networks/test-network"},
+					{Mac: "AA:BB:CC:DD:EE:FF", Network: "projects/67890/networks/other-network"},
 				},
 			},
-			want: "my-super-long-network-name-that-will-be-truncated-and-then-some-", // Expected 64 char truncation
+			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+				"gce.dra.net/networkName":          {StringValue: ptr.To("test-network")},
+				"gce.dra.net/networkProjectNumber": {IntValue: ptr.To(int64(12345))},
+			},
 		},
 		{
-			name: "mac no match",
-			args: args{
-				mac: "11:22:33:44:55:66",
-				instance: &cloudprovider.CloudInstance{
-					Interfaces: []cloudprovider.NetworkInterface{
-						{Mac: "aa:bb:cc:dd:ee:ff", Network: "/projects/proj1/global/networks/net1"},
-						{Mac: "00:11:22:33:44:55", Network: "/projects/proj2/global/networks/net2"},
-					},
+			name: "GCE provider, MAC found, invalid network string for GCE parsing",
+			mac:  "00:11:22:33:44:55",
+			instance: &cloudprovider.CloudInstance{
+				Provider: cloudprovider.CloudProviderGCE,
+				Interfaces: []cloudprovider.NetworkInterface{
+					{Mac: "00:11:22:33:44:55", Network: "invalid-gce-network-string"},
 				},
 			},
-			want: "",
+			want: nil, // gce.GetGCEAttributes returns nil for invalid network string
 		},
 		{
-			name: "mac match, network needs no truncation",
-			args: args{
-				mac: "aa:bb:cc:dd:ee:ff",
-				instance: &cloudprovider.CloudInstance{
-					Interfaces: []cloudprovider.NetworkInterface{
-						{Mac: "aa:bb:cc:dd:ee:ff", Network: "global/networks/short-net"},
-					},
+			name: "Unsupported provider, MAC found",
+			mac:  "00:11:22:33:44:55",
+			instance: &cloudprovider.CloudInstance{
+				Provider: cloudprovider.CloudProviderAWS, // Unsupported provider
+				Interfaces: []cloudprovider.NetworkInterface{
+					{Mac: "00:11:22:33:44:55", Network: "aws-network-info"},
 				},
 			},
-			want: "short-net",
-		},
-		{
-			name: "mac match, empty network string",
-			args: args{
-				mac:      "00:11:22:33:44:55",
-				instance: &cloudprovider.CloudInstance{Interfaces: []cloudprovider.NetworkInterface{{Mac: "00:11:22:33:44:55", Network: ""}}},
-			},
-			want: "",
+			want: nil,
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := cloudNetwork(tt.args.mac, tt.args.instance); got != tt.want {
-				t.Errorf("cloudNetwork() = %v, want %v", got, tt.want)
+			got := getProviderAttributes(tt.mac, tt.instance)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("getProviderAttributes() got = %v, want %v", got, tt.want)
 			}
 		})
 	}
