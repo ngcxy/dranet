@@ -271,9 +271,8 @@ func (db *DB) netdevToDRAdev(ifName string) (*resourceapi.Device, error) {
 	}
 
 	mac := link.Attrs().HardwareAddr.String()
-	// this is bounded and small number O(N) is ok
-	if network := cloudNetwork(mac, db.instance); network != "" {
-		device.Basic.Attributes["dra.net/cloudNetwork"] = resourceapi.DeviceAttribute{StringValue: &network}
+	for name, attribute := range getProviderAttributes(mac, db.instance) {
+		device.Basic.Attributes[name] = attribute
 	}
 
 	return &device, nil
