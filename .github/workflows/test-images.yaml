@@ -23,7 +23,7 @@ env:
 jobs:
    publish-test-image:
     name: publish-test-image
-    runs-on: ubuntu-20.04-4core
+    runs-on: ubuntu-24.04-4core
     timeout-minutes: 100
     
     steps:
