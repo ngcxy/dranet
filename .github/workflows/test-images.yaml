@@ -43,7 +43,7 @@ jobs:
       uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-        tags: type=ref
+        tags: type=sha
 
     - name: Log in to the Container registry
       uses: docker/login-action@v3
