@@ -121,6 +121,9 @@ enable = false
   icon = "fab fa-slack"
   desc = "Chat with other project developers"
 
+[services]
+[services.googleAnalytics]
+id = "G-YH3W884R6Z"
 
 # privacy settings
 [privacy]
