@@ -1,5 +1,5 @@
 ---
-title: "MPI Operator on GKE"
+title: "MPI Operator on GKE and GPUDirect RDMA"
 date: 2025-05-27T11:30:40Z
 ---
 
