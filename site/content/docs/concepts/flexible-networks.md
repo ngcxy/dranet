@@ -26,7 +26,7 @@ machine into the container’s network namespace.
 Here’s the twist: when the application finishes and the container goes away, the network card is moved back to the host.
 But what if another card or virtual interface with the same name already exists? To prevent a conflict,
 Linux will automatically rename the card it just got back, maybe to something generic like `dev7`, for more technical
-details see [Linux Network Namespaces and Interfaces](./linux-network-interfaces.md)
+details see [Linux Network Namespaces and Interfaces](/docs/concepts/linux-network-interfaces/)
 
 
 ## A Network Is More Than Just a Card
