@@ -10,9 +10,16 @@ To configure network interfaces in DraNet, users can provide custom configuratio
 The primary structure for custom network configuration is NetworkConfig. It encompasses settings for the network interface itself and any specific routes to be applied within the Pod's network namespace.
 
 ```go
-type NetworkConfig struct {  
+type NetworkConfig struct {
+	// Interface defines core properties of the network interface.
+	// Settings here are typically managed by `ip link` commands.
 	Interface InterfaceConfig `json:"interface"`
-	Routes    []RouteConfig   `json:"routes"`
+
+	// Routes defines static routes to be configured for this interface.
+	Routes []RouteConfig `json:"routes,omitempty"`
+
+	// Ethtool defines hardware offload features and other settings managed by `ethtool`.
+	Ethtool *EthtoolConfig `json:"ethtool,omitempty"`
 }
 ```
 
@@ -21,25 +28,54 @@ type NetworkConfig struct {
 The InterfaceConfig structure allows you to specify details for a single network interface.
 
 ```go
-type InterfaceConfig struct {  
-	Name         string   `json:"name,omitempty"`
-	Addresses    []string `json:"addresses,omitempty"`
-	MTU          int32    `json:"mtu,omitempty"`
-	HardwareAddr string   `json:"hardwareAddr,omitempty"`
+type InterfaceConfig struct {
+	// Name is the desired logical name of the interface inside the Pod (e.g., "net0", "eth_app").
+	// If not specified, DraNet may use or derive a name from the original interface.
+	Name string `json:"name,omitempty"`
+
+	// Addresses is a list of IP addresses in CIDR format (e.g., "192.168.1.10/24")
+	// to be assigned to the interface.
+	Addresses []string `json:"addresses,omitempty"`
+
+	// MTU is the Maximum Transmission Unit for the interface.
+	MTU *int32 `json:"mtu,omitempty"`
+
+	// HardwareAddr is the MAC address of the interface.
+	HardwareAddr *string `json:"hardwareAddr,omitempty"`
+
+	// GSOMaxSize sets the maximum Generic Segmentation Offload size for IPv6.
+	// Managed by `ip link set <dev> gso_max_size <val>`. For enabling Big TCP.
+	GSOMaxSize *int32 `json:"gsoMaxSize,omitempty"`
+
+	// GROMaxSize sets the maximum Generic Receive Offload size for IPv6.
+	// Managed by `ip link set <dev> gro_max_size <val>`. For enabling Big TCP.
+	GROMaxSize *int32 `json:"groMaxSize,omitempty"`
+
+	// GSOv4MaxSize sets the maximum Generic Segmentation Offload size.
+	// Managed by `ip link set <dev> gso_ipv4_max_size <val>`. For enabling Big TCP.
+	GSOIPv4MaxSize *int32 `json:"gsoIPv4MaxSize,omitempty"`
+
+	// GROv4MaxSize sets the maximum Generic Receive Offload size.
+	// Managed by `ip link set <dev> gro_ipv4_max_size <val>`. For enabling Big TCP.
+	GROIPv4MaxSize *int32 `json:"groIPv4MaxSize,omitempty"`
 }
 ```
 
-* **name** (string, optional): The logical name that the interface will have inside the Pod (e.g., "eth0", "enp0s3"). If not specified, DraNet will keep the original name if compliant.  
-* **addresses** ([]string, optional): A list of IP addresses in CIDR format (e.g., "192.168.1.10/24", "2001:db8::1/64") to be assigned to the interface.  
-* **mtu** (int32, optional): The Maximum Transmission Unit for the interface.  
-* **hardwareAddr** (string, optional, Read-Only): The current hardware (MAC) address of the interface.
+* **name** (string, optional): The logical name that the interface will have inside the Pod (e.g., "eth0", "enp0s3"). If not specified, DraNet will keep the original name if compliant.
+* **addresses** ([]string, optional): A list of IP addresses in CIDR format (e.g., "192.168.1.10/24", "2001:db8::1/64") to be assigned to the interface.
+* **mtu** (int32, optional): The Maximum Transmission Unit for the interface.
+* **hardwareAddr** (string, optional): The MAC address of the interface.
+* **gsoMaxSize** (int32, optional): The maximum Generic Segmentation Offload size for IPv6.
+* **groMaxSize** (int32, optional): The maximum Generic Receive Offload size for IPv6.
+* **gsoIPv4MaxSize** (int32, optional): The maximum Generic Segmentation Offload size for IPv4.
+* **groIPv4MaxSize** (int32, optional): The maximum Generic Receive Offload size for IPv4.
 
-#### **Route Configuration (RouteConfig)**
+#### Route Configuration (RouteConfig)
 
 The RouteConfig structure defines individual network routes to be added to the Pod's network namespace, associated with the configured interface.
 
 ```go
-type RouteConfig struct {  
+type RouteConfig struct {
 	Destination string `json:"destination,omitempty"`
 	Gateway     string `json:"gateway,omitempty"`
 	Source      string `json:"source,omitempty"`
@@ -53,50 +89,79 @@ type RouteConfig struct {
 * **scope** (uint8, optional): The scope of the route. Only Link (253) or Universe (0) are allowed.  
   * Link (253): Routes directly to a device without a gateway (e.g., for directly connected subnets).  
   * Universe (0): Routes to a network via a gateway.
+ 
+#### Ethtool Configuration (EthtoolConfig)
 
-### **Example: Customizing a Network Interface and Routes**
+The EthtoolConfig structure allows for the configuration of hardware offload features and other settings managed by ethtool.
 
-Below is an example of a ResourceClaim that allocates a dummy interface, renames it to "eth99", assigns a static IP address, and configures two routes: one to a subnet via a gateway and another link-scoped route.
+```go
+// EthtoolConfig defines ethtool-based optimizations for a network interface.
+// These settings correspond to features typically toggled using `ethtool -K <dev> <feature> on|off`.
+type EthtoolConfig struct {
+	// Features is a map of ethtool feature names to their desired state (true for on, false for off).
+	// Example: {"tcp-segmentation-offload": true, "rx-checksum": true}
+	Features map[string]bool `json:"features,omitempty"`
 
+	// PrivateFlags is a map of device-specific private flag names to their desired state.
+	// Example: {"my-custom-flag": true}
+	PrivateFlags map[string]bool `json:"privateFlags,omitempty"`
+}
+```
+
+* **features** (map[string]bool, optional): A map of ethtool feature names to their desired state (true for on, false for off). For example, {"tcp-segmentation-offload": true, "rx-checksum": true}.
+* **privateFlags** (map[string]bool, optional): A map of device-specific private flag names to their desired state. For example, {"my-custom-flag": true}.
+
+### Example: Customizing a Network Interface and Routes
+
+Below is an example of a ResourceClaim that allocates a dummy interface, renames it to "dranet0", assigns a static IP address, and configures two routes: one to a subnet via a gateway and another link-scoped route. It also disables several ethtool features.
 
 ```yaml
-apiVersion: resource.k8s.io/v1beta1  
-kind: ResourceClaim  
-metadata:  
-  name: dummy-interface-static-ip-route  
-spec:  
-  devices:  
-    requests:  
-      - name: req-dummy  
-        deviceClassName: dra.net  
-        selectors:  
-          - cel:  
-              expression: device.attributes["dra.net"].type == "dummy"  
-    config:  
-      - opaque:  
-          driver: dra.net  
-          parameters:  
-            interface:  
-              name: "eth99"  
-              addresses:  
-                - "169.254.169.13/32"  
-            routes:  
-              - destination: "169.254.169.0/24"  
-                gateway: "169.254.169.1"  
-              - destination: "169.254.169.1/32"  
-                scope: 253  
----  
-apiVersion: v1  
-kind: Pod  
-metadata:  
-  name: pod3  
-  labels:  
-    app: pod  
-spec:  
-  containers:  
-    - name: ctr1  
-      image: registry.k8s.io/e2e-test-images/agnhost:2.39  
-  resourceClaims:  
-    - name: dummy1  
-      resourceClaimName: dummy-interface-static-ip-route  
+apiVersion: resource.k8s.io/v1beta1
+kind: ResourceClaim
+metadata:
+  name: dummy-interface-advanced
+spec:
+  devices:
+    requests:
+    - name: req-dummy-advanced
+      deviceClassName: dra.net
+      selectors:
+        - cel:
+            expression: device.attributes["dra.net"].ifName == "dummy3"
+    config:
+    - opaque:
+        driver: dra.net
+        parameters:
+          interface:
+            name: "dranet0"
+            addresses:
+            - "169.254.169.14/24"
+            mtu: 4321
+            hardwareAddr: "00:11:22:33:44:55"
+          routes:
+          - destination: "169.254.169.0/24"
+            gateway: "169.254.169.1"
+          - destination: "169.254.169.1/32"
+            scope: 253
+          ethtool:
+            features:
+              tcp-segmentation-offload: false
+              generic-receive-offload: false
+              large-receive-offload: false
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-advanced-cfg
+  labels:
+    app: pod
+spec:
+  containers:
+  - name: ctr1
+    image: registry.k8s.io/e2e-test-images/agnhost:2.54
+    # Keep the container running
+    command: ["sleep", "infinity"]
+  resourceClaims:
+  - name: dummy1
+    resourceClaimName: dummy-interface-advanced
 ```
