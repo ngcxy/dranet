@@ -85,9 +85,6 @@ gke-tpu-de8b9feb-kgdj / #
 
 If you want to upload some binary, per example `bpftrace` or `pwru` , you can use the streaming capabilities for that:
 
-```
-
-
 ## Troubleshooting
 
 To get the list of `dranet` Pods use the label:
