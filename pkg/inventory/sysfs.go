@@ -124,6 +124,16 @@ type pciAddress struct {
 	function string
 }
 
+// The PCI root is the root PCI device, derived from the
+// pciAddress of a device. Spec is defined from the DRA KEP.
+// https://github.com/kubernetes/enhancements/pull/5316
+type pciRoot struct {
+	domain string
+	// The root may have a different host bus than the PCI device.
+	// e.g https://uefi.org/specs/UEFI/2.10/14_Protocols_PCI_Bus_Support.html#server-system-with-four-pci-root-bridges
+	bus string
+}
+
 func bdfAddress(ifName string, path string) (*pciAddress, error) {
 	address := &pciAddress{}
 	// https://docs.kernel.org/PCI/sysfs-pci.html
@@ -162,6 +172,28 @@ func bdfAddress(ifName string, path string) (*pciAddress, error) {
 		return nil, fmt.Errorf("could not find corresponding PCI address: %v", pci)
 	}
 	return address, nil
+}
+
+// Obtain the root of the pci device for the interface.
+// TODO(@michaelasp): Change this to use k8s helper function when available for consistency with other DRA solutions.
+func bdfRoot(ifName, path string) (*pciRoot, error) {
+	root := &pciRoot{}
+
+	sysfsPath := realpath(ifName, path)
+	bfd := strings.Split(sysfsPath, "/")
+	if len(bfd) < 5 {
+		return nil, fmt.Errorf("could not find corresponding PCI address: %v", bfd)
+	}
+	klog.V(4).Infof("pci root: %s", bfd[3])
+	rootString := strings.Split(bfd[3], ":")
+	switch len(rootString) {
+	case 2:
+		root.domain = strings.TrimPrefix(rootString[0], "pci")
+		root.bus = rootString[1]
+	default:
+		return nil, fmt.Errorf("could not find corresponding PCI root: %v", rootString)
+	}
+	return root, nil
 }
 
 func ids(ifName string, path string) (*pcidb.Entry, error) {

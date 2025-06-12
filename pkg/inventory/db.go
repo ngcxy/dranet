@@ -294,22 +294,16 @@ func (db *DB) netdevToDRAdev(link netlink.Link) (*resourceapi.Device, error) {
 func addPCIAttributes(device *resourceapi.BasicDevice, ifName string, path string) {
 	device.Attributes["dra.net/virtual"] = resourceapi.DeviceAttribute{BoolValue: ptr.To(false)}
 
-	address, err := bdfAddress(ifName, path)
+	root, err := bdfRoot(ifName, path)
 	if err == nil {
-		if address.domain != "" {
-			device.Attributes["dra.net/pciAddressDomain"] = resourceapi.DeviceAttribute{StringValue: &address.domain}
-		}
-		if address.bus != "" {
-			device.Attributes["dra.net/pciAddressBus"] = resourceapi.DeviceAttribute{StringValue: &address.bus}
-		}
-		if address.device != "" {
-			device.Attributes["dra.net/pciAddressDevice"] = resourceapi.DeviceAttribute{StringValue: &address.device}
-		}
-		if address.function != "" {
-			device.Attributes["dra.net/pciAddressFunction"] = resourceapi.DeviceAttribute{StringValue: &address.function}
+		if root.domain != "" && root.bus != "" {
+			// standardized attribute for all dra drivers
+			// ref: https://github.com/kubernetes/enhancements/pull/5316
+			pcieRoot := fmt.Sprintf("pci%s:%s", root.domain, root.bus)
+			device.Attributes["resource.kubernetes.io/pcieRoot"] = resourceapi.DeviceAttribute{StringValue: &pcieRoot}
 		}
 	} else {
-		klog.Infof("could not get pci address : %v", err)
+		klog.Infof("could not get pci root : %v", err)
 	}
 
 	entry, err := ids(ifName, path)
