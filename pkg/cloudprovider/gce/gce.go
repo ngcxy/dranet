@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -94,6 +95,12 @@ func GetInstance(ctx context.Context) (*cloudprovider.CloudInstance, error) {
 			klog.Infof("could not get network interfaces on GCE ... retrying: %v", err)
 			return false, nil
 		}
+		gceTopologyAttributes, err := metadata.GetWithContext(ctx, "instance/attributes/physical_host")
+		if err != nil {
+			klog.Infof("could not get physical host on GCE ... retrying: %v", err)
+			return false, nil
+		}
+		instance.Topology = gceTopologyAttributes
 		return true, nil
 	})
 	if err != nil {
@@ -103,7 +110,7 @@ func GetInstance(ctx context.Context) (*cloudprovider.CloudInstance, error) {
 }
 
 // GetGCEAttributes fetches all attributes related to the provided GCP network.
-func GetGCEAttributes(network string) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute {
+func GetGCEAttributes(network, topology string) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute {
 	attributes := make(map[resourceapi.QualifiedName]resourceapi.DeviceAttribute)
 	var projectNumber int64
 	var name string
@@ -114,7 +121,17 @@ func GetGCEAttributes(network string) map[resourceapi.QualifiedName]resourceapi.
 		klog.Warningf("Error parsing network %q : %v", network, err)
 		return nil
 	}
+	topologyParts := strings.SplitN(strings.TrimPrefix(topology, "/"), "/", 3)
+	// topology may not be always available
+	if len(topologyParts) == 3 {
+		attributes["gce.dra.net/block"] = resourceapi.DeviceAttribute{StringValue: &topologyParts[0]}
+		attributes["gce.dra.net/subblock"] = resourceapi.DeviceAttribute{StringValue: &topologyParts[1]}
+		attributes["gce.dra.net/host"] = resourceapi.DeviceAttribute{StringValue: &topologyParts[2]}
+	} else {
+		klog.Warningf("Error parsing host topology, may be unsupported on VM %q : %v", topology, err)
+	}
 	attributes["gce.dra.net/networkName"] = resourceapi.DeviceAttribute{StringValue: &name}
 	attributes["gce.dra.net/networkProjectNumber"] = resourceapi.DeviceAttribute{IntValue: &projectNumber}
+	klog.Info(attributes)
 	return attributes
 }

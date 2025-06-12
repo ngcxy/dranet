@@ -17,10 +17,10 @@ limitations under the License.
 package inventory
 
 import (
-	"github.com/google/go-cmp/cmp"
 	"testing"
 
 	"github.com/google/dranet/pkg/cloudprovider"
+	"github.com/google/go-cmp/cmp"
 	resourceapi "k8s.io/api/resource/v1beta1"
 	"k8s.io/utils/ptr"
 )
@@ -67,10 +67,14 @@ func TestGetProviderAttributes(t *testing.T) {
 					{Mac: "00:11:22:33:44:55", Network: "projects/12345/networks/test-network"},
 					{Mac: "AA:BB:CC:DD:EE:FF", Network: "projects/67890/networks/other-network"},
 				},
+				Topology: "/block/subblock/host",
 			},
 			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
 				"gce.dra.net/networkName":          {StringValue: ptr.To("test-network")},
 				"gce.dra.net/networkProjectNumber": {IntValue: ptr.To(int64(12345))},
+				"gce.dra.net/block":                {StringValue: ptr.To("block")},
+				"gce.dra.net/subblock":             {StringValue: ptr.To("subblock")},
+				"gce.dra.net/host":                 {StringValue: ptr.To("host")},
 			},
 		},
 		{
@@ -83,6 +87,22 @@ func TestGetProviderAttributes(t *testing.T) {
 				},
 			},
 			want: nil, // gce.GetGCEAttributes returns nil for invalid network string
+		},
+		{
+			name: "GCE provider, MAC found, valid network, invalid topology",
+			mac:  "00:11:22:33:44:55",
+			instance: &cloudprovider.CloudInstance{
+				Provider: cloudprovider.CloudProviderGCE,
+				Interfaces: []cloudprovider.NetworkInterface{
+					{Mac: "00:11:22:33:44:55", Network: "projects/12345/networks/test-network"},
+					{Mac: "AA:BB:CC:DD:EE:FF", Network: "projects/67890/networks/other-network"},
+				},
+				Topology: "/block/subblock",
+			},
+			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+				"gce.dra.net/networkName":          {StringValue: ptr.To("test-network")},
+				"gce.dra.net/networkProjectNumber": {IntValue: ptr.To(int64(12345))},
+			},
 		},
 		{
 			name: "Unsupported provider, MAC found",

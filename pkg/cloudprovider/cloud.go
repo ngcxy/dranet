@@ -22,6 +22,7 @@ type CloudInstance struct {
 	Provider            CloudProvider
 	AcceleratorProtocol string
 	Interfaces          []NetworkInterface
+	Topology            string
 }
 
 type NetworkInterface struct {

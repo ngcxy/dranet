@@ -59,7 +59,7 @@ func getProviderAttributes(mac string, instance *cloudprovider.CloudInstance) ma
 	}
 	for _, cloudInterface := range instance.Interfaces {
 		if cloudInterface.Mac == mac {
-			return gce.GetGCEAttributes(cloudInterface.Network)
+			return gce.GetGCEAttributes(cloudInterface.Network, instance.Topology)
 		}
 	}
 	klog.Warningf("no matching cloud interface found for mac %s", mac)
