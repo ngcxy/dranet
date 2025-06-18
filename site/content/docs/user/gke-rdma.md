@@ -689,8 +689,7 @@ If you encounter network failures during testing, indicated by errors such as:
 ```sh
 nccl-gib-test-4w-3: Test CUDA failure common.cu:1030 'invalid device ordinal'
 
-nccl-gib-4w-1: transport/nvls.cc:598 NCCL WARN Cuda failure 1 'invalid argument'
-A common resolution is to reboot the affected virtual machines.
+nccl-gib-test-4w-1: transport/nvls.cc:598 NCCL WARN Cuda failure 1 'invalid argument'
 ```
 
 A common resolution is to reboot the affected virtual machines.
