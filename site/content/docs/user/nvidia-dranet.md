@@ -1,5 +1,5 @@
 ---
-title: "GKE with NVIDIA DRA and DraNEt"
+title: "GKE with NVIDIA DRA and DraNet"
 date: 2025-06-20T10:10:40Z
 ---
 
@@ -88,7 +88,7 @@ Apply the following DaemonSet to install the RDMA binaries and the NCCL library 
 kubectl apply -f https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/refs/heads/master/gpudirect-rdma/nccl-rdma-installer.yaml
 ```
 
-Install DRANet
+Install DraNet
 ```sh
 kubectl apply -f https://raw.githubusercontent.com/google/dranet/refs/heads/main/install.yaml
 ```
@@ -461,6 +461,6 @@ They now connect!
 
 #### Conclusion
 
-Using both DRANet and the Nvidia DRA libraries in combination is a way to quickly allocate both GPUs and RDMA devices in order to create interconnected workloads that can span multiple nodes. This can be used the create workloads that span multiple nodes and take advantage of spare resources on nodes. 
+Using both DraNet and the Nvidia DRA libraries in combination is a way to quickly allocate both GPUs and RDMA devices in order to create interconnected workloads that can span multiple nodes. This can be used the create workloads that span multiple nodes and take advantage of spare resources on nodes. 
 
-For instance, consider that you have 2 nodes with 8 GPUs apiece. If you ran 2 training jobs that took 6 GPUs each then you would have 4 GPUs idle. By enabling DRANet you could take advantage of those remaining 4 for another training job. Without providing the RDMA devics, these GPUs would only be able to communicate within the same node.
+For instance, consider that you have 2 nodes with 8 GPUs apiece. If you ran 2 training jobs that took 6 GPUs each then you would have 4 GPUs idle. By enabling DraNet you could take advantage of those remaining 4 for another training job. Without providing the RDMA devics, these GPUs would only be able to communicate within the same node.
