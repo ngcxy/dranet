@@ -31,7 +31,7 @@ gcloud compute --project=${PROJECT?} \
 gcloud compute --project=${PROJECT?} \
   networks subnets create \
   tpu-net-2-sub \
-  --network=tpu-net-1 \
+  --network=tpu-net-2 \
   --region=${REGION?} \
   --range=192.168.1.0/24
 
