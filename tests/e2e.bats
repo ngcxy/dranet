@@ -226,3 +226,32 @@ load 'test_helper/bats-assert/load'
   kubectl delete -f "$BATS_TEST_DIRNAME"/../examples/resourceclaim_disable_ebpf.yaml
   kubectl delete -f "$BATS_TEST_DIRNAME"/../examples/deviceclass.yaml
 }
+
+# Test case for validating multiple devices allocated to the same pod.
+@test "2 dummy interfaces with IP addresses ResourceClaimTemplate" {
+  docker exec "$CLUSTER_NAME"-worker bash -c "ip link add dummy6 type dummy"
+  docker exec "$CLUSTER_NAME"-worker bash -c "ip link set up dev dummy6"
+  docker exec "$CLUSTER_NAME"-worker bash -c "ip addr add 169.254.169.13/32 dev dummy6"
+
+  docker exec "$CLUSTER_NAME"-worker bash -c "ip link add dummy7 type dummy"
+  docker exec "$CLUSTER_NAME"-worker bash -c "ip link set up dev dummy7"
+  docker exec "$CLUSTER_NAME"-worker bash -c "ip addr add 169.254.169.14/32 dev dummy7"
+
+  kubectl apply -f "$BATS_TEST_DIRNAME"/../examples/deviceclass.yaml
+  kubectl apply -f "$BATS_TEST_DIRNAME"/../examples/resourceclaimtemplate_double.yaml
+  kubectl wait --timeout=30s --for=condition=ready pods -l app=MyApp
+  POD_NAME=$(kubectl get pods -l app=MyApp -o name)
+  run kubectl exec $POD_NAME -- ip addr show dummy6
+  assert_success
+  assert_output --partial "169.254.169.13"
+  run kubectl exec $POD_NAME -- ip addr show dummy7
+  assert_success
+  assert_output --partial "169.254.169.14"
+  run kubectl get resourceclaims -o=jsonpath='{.items[0].status.devices[*]}'
+  assert_success
+  assert_output --partial "169.254.169.13"
+  assert_output --partial "169.254.169.14"
+
+  kubectl delete -f "$BATS_TEST_DIRNAME"/../examples/deviceclass.yaml
+  kubectl delete -f "$BATS_TEST_DIRNAME"/../examples/resourceclaimtemplate_double.yaml
+}

@@ -108,10 +108,17 @@ func (np *NetworkDriver) RunPodSandbox(ctx context.Context, pod *api.PodSandbox)
 	// store the Pod metadata in the db
 	np.netdb.AddPodNetns(podKey(pod), ns)
 
+	// Track all the status updates needed for the resource claims of the pod.
+	statusUpdates := map[types.NamespacedName]*resourceapply.ResourceClaimStatusApplyConfiguration{}
 	// Process the configurations of the ResourceClaim
 	for deviceName, config := range podConfig {
 		klog.V(4).Infof("RunPodSandbox processing device: %s with config: %#v", deviceName, config)
-		resourceClaimStatus := resourceapply.ResourceClaimStatus()
+		resourceClaim := types.NamespacedName{Name: config.Claim.Name, Namespace: config.Claim.Namespace}
+		resourceClaimStatus := statusUpdates[resourceClaim]
+		if statusUpdates[resourceClaim] == nil {
+			resourceClaimStatus = resourceapply.ResourceClaimStatus()
+			statusUpdates[resourceClaim] = resourceClaimStatus
+		}
 		// resourceClaim status for this specific device
 		resourceClaimStatusDevice := resourceapply.
 			AllocatedDeviceStatus().
@@ -196,22 +203,25 @@ func (np *NetworkDriver) RunPodSandbox(ctx context.Context, pod *api.PodSandbox)
 		}
 		// Ok
 		resourceClaimStatus.WithDevices(resourceClaimStatusDevice)
-		resourceClaimApply := resourceapply.ResourceClaim(config.Claim.Name, config.Claim.Namespace).WithStatus(resourceClaimStatus)
-		// do not block the handler to update the status
+	}
+	// do not block the handler to update the status
+	for claim, status := range statusUpdates {
+		resourceClaimApply := resourceapply.ResourceClaim(claim.Name, claim.Namespace).WithStatus(status)
 		go func() {
 			ctxStatus, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			_, err = np.kubeClient.ResourceV1beta1().ResourceClaims(config.Claim.Namespace).ApplyStatus(ctxStatus,
+			_, err := np.kubeClient.ResourceV1beta1().ResourceClaims(claim.Namespace).ApplyStatus(ctxStatus,
 				resourceClaimApply,
 				metav1.ApplyOptions{FieldManager: np.driverName, Force: true},
 			)
 			if err != nil {
-				klog.Infof("failed to update status for claim %s/%s : %v", config.Claim.Namespace, config.Claim.Name, err)
+				klog.Infof("failed to update status for claim %s/%s : %v", claim.Namespace, claim.Name, err)
 			} else {
-				klog.V(4).Infof("update status for claim %s/%s", config.Claim.Namespace, config.Claim.Name)
+				klog.V(4).Infof("updated status for claim %s/%s", claim.Namespace, claim.Name)
 			}
 		}()
 	}
+
 	return nil
 }
 
