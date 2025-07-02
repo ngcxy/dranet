@@ -33,6 +33,9 @@ clean:
 test:
 	CGO_ENABLED=1 go test -v -race -count 1 ./...
 
+e2e-test:
+	bats --verbose-run tests/
+
 # code linters
 lint:
 	hack/lint.sh
