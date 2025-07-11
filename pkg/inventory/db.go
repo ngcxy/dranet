@@ -57,6 +57,7 @@ type DB struct {
 
 	rateLimiter   *rate.Limiter
 	notifications chan []resourceapi.Device
+	hasDevices    bool
 }
 
 func New() *DB {
@@ -176,7 +177,8 @@ func (db *DB) Run(ctx context.Context) error {
 		}
 
 		klog.V(4).Infof("Found %d devices", len(devices))
-		if len(devices) > 0 {
+		if len(devices) > 0 || db.hasDevices {
+			db.hasDevices = len(devices) > 0
 			db.notifications <- devices
 		}
 		select {
