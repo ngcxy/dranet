@@ -98,7 +98,7 @@ kubectl apply -f https://raw.githubusercontent.com/google/dranet/refs/heads/main
 In order to install the NVIDIA DRA Drivers you will need to clone the [NVIDIA DRA](https://github.com/NVIDIA/k8s-dra-driver-gpu) repo. Ensure you have [helm](https://helm.sh/docs/intro/install/) installed.
 
 ```
-helm upgrade -i --create-namespace --namespace nvidia-dra-driver-gpu nvidia-dra-driver-gpu ./k8s-dra-driver-gpu/deployments/helm/nvidia-dra-driver-gpu --set gpuResourcesEnabledOverride=true --values https://raw.githubusercontent.com/google/dranet/refs/heads/main/values.yaml --wait 
+helm upgrade -i --create-namespace --namespace nvidia-dra-driver-gpu nvidia-dra-driver-gpu ./k8s-dra-driver-gpu/deployments/helm/nvidia-dra-driver-gpu --set gpuResourcesEnabledOverride=true --values https://raw.githubusercontent.com/google/dranet/refs/heads/main/examples/demo_nvidia_dranet/values.yaml --wait 
 ```
 
 The values.yaml adds some additional tolerations and removes some priorities that need to be done in order to work nicely with GKE.
