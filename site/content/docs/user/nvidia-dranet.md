@@ -113,7 +113,7 @@ nvidia-dra-driver-gpu-controller-66696889cd-86m8f   1/1     Running    0        
 If you only see the controller like above, you will need to label the nodes with GPUs on them in order to get the kubelet plugin running.
 
 ```sh
-kubectl label node -l cloud.google.com/gke-nodepool=<nodepool-name> --overwrite nvidia.com/gpu.present=true
+kubectl label node -l cloud.google.com/gke-gpu=true --overwrite nvidia.com/gpu.present=true
 
 kubectl get pods -n nvidia-dra-driver-gpu
 NAME                                                READY   STATUS     RESTARTS   AGE
