@@ -4,7 +4,7 @@ date: 2025-07-14T10:10:40Z
 ---
 
 To get started, follow the instructions to create a [GKE cluster with DRA
-support and using DraNet](./gke-rdma.md), it is important to follow the
+support and using DraNet](/docs/user/gke-rdma), it is important to follow the
 instructions, since there are multiple dependencies on the Kubernetes API
 version, the RDMA NCCL installer and the DraNet component.
 
