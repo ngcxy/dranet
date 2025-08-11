@@ -2,15 +2,6 @@ module github.com/google/dranet
 
 go 1.24.0
 
-replace (
-	k8s.io/api => github.com/kubernetes/kubernetes/staging/src/k8s.io/api v0.0.0-20250724145648-d21da29c9ec4
-	k8s.io/apimachinery => github.com/kubernetes/kubernetes/staging/src/k8s.io/apimachinery v0.0.0-20250724145648-d21da29c9ec4
-	k8s.io/client-go => github.com/kubernetes/kubernetes/staging/src/k8s.io/client-go v0.0.0-20250724145648-d21da29c9ec4
-	k8s.io/component-base => github.com/kubernetes/kubernetes/staging/src/k8s.io/component-base v0.0.0-20250724145648-d21da29c9ec4
-	k8s.io/dynamic-resource-allocation => github.com/kubernetes/kubernetes/staging/src/k8s.io/dynamic-resource-allocation v0.0.0-20250724145648-d21da29c9ec4
-	k8s.io/kubelet => github.com/kubernetes/kubernetes/staging/src/k8s.io/kubelet v0.0.0-20250724145648-d21da29c9ec4
-)
-
 require (
 	cloud.google.com/go/compute v1.42.0
 	cloud.google.com/go/compute/metadata v0.8.0
@@ -32,12 +23,12 @@ require (
 	golang.org/x/time v0.12.0
 	google.golang.org/api v0.246.0
 	google.golang.org/protobuf v1.36.7
-	k8s.io/api v0.34.0-beta.0
-	k8s.io/apimachinery v0.34.0-beta.0
-	k8s.io/client-go v0.34.0-beta.0
+	k8s.io/api v0.34.0-rc.0
+	k8s.io/apimachinery v0.34.0-rc.0
+	k8s.io/client-go v0.34.0-rc.0
 	k8s.io/cloud-provider-gcp v0.0.0-20250326051131-7056e3facd39
-	k8s.io/component-helpers v0.34.0-beta.0
-	k8s.io/dynamic-resource-allocation v0.0.0
+	k8s.io/component-helpers v0.34.0-rc.0
+	k8s.io/dynamic-resource-allocation v0.34.0-rc.0
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/utils v0.0.0-20250604170112-4c0f3b243397
 	sigs.k8s.io/json v0.0.0-20241014173422-cfa47c3a1cc8
@@ -55,7 +46,7 @@ require (
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.12.2 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
-	github.com/fxamacker/cbor/v2 v2.8.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.21.1 // indirect
@@ -91,7 +82,7 @@ require (
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
-	go.etcd.io/etcd/client/pkg/v3 v3.6.1 // indirect
+	go.etcd.io/etcd/client/pkg/v3 v3.6.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.61.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
@@ -116,10 +107,10 @@ require (
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	k8s.io/cri-api v0.34.0-beta.0 // indirect
+	k8s.io/cri-api v0.34.0-rc.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20250710124328-f3f2b991d03b // indirect
-	k8s.io/kubelet v0.33.3 // indirect
+	k8s.io/kubelet v0.34.0-rc.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.0 // indirect
-	sigs.k8s.io/yaml v1.5.0 // indirect
+	sigs.k8s.io/yaml v1.6.0 // indirect
 )
