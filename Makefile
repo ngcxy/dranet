@@ -59,10 +59,11 @@ image:
 # docker buildx build --platform=${PLATFORMS} $(OUTPUT) --progress=$(PROGRESS) -t ${IMAGE} --pull $(EXTRA_BUILD_OPT) .
 	docker build . -t ${IMAGE} --load
 
-image-build:
+push-platform-image:
 	docker buildx build . \
 		--platform="${PLATFORMS}" \
-		--tag="${IMAGE}"
+		--tag="${IMAGE}" \
+		--push
 
 push-image: image
 	docker tag ${IMAGE} ghcr.io/google/dranet:stable
