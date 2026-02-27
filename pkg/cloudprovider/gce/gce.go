@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 
+	"github.com/google/dranet/pkg/apis"
 	"github.com/google/dranet/pkg/cloudprovider"
 	resourceapi "k8s.io/api/resource/v1"
 )
@@ -148,6 +149,12 @@ func (g *GCEInstance) GetDeviceAttributes(id cloudprovider.DeviceIdentifiers) ma
 	}
 
 	return attributes
+}
+
+// GetDeviceConfig fetches any infrastructure-specific network configuration
+// required by the device. Returning nil means no specific config is needed.
+func (g *GCEInstance) GetDeviceConfig(id cloudprovider.DeviceIdentifiers) *apis.NetworkConfig {
+	return nil
 }
 
 // GetInstance retrieves GCE instance properties by querying the metadata server.

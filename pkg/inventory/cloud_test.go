@@ -42,6 +42,10 @@ func (m *mockCloudInstance) GetDeviceAttributes(id cloudprovider.DeviceIdentifie
 	return nil
 }
 
+func (m *mockCloudInstance) GetDeviceConfig(id cloudprovider.DeviceIdentifiers) *apis.NetworkConfig {
+	return nil
+}
+
 func TestGetProviderAttributes(t *testing.T) {
 	tests := []struct {
 		name     string

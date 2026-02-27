@@ -49,8 +49,13 @@ func getInstanceProperties(ctx context.Context) cloudprovider.CloudInstance {
 
 // getProviderAttributes retrieves cloud provider-specific attributes for a network interface
 func getProviderAttributes(device *resourceapi.Device, instance cloudprovider.CloudInstance) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute {
-	if instance == nil || device == nil {
-		klog.Warningf("instance metadata or device is nil (instance: %v, device: %v), cannot get provider attributes.")
+	if instance == nil {
+		klog.Warningf("instance metadata is nil, cannot get provider attributes.")
+		return nil
+	}
+
+	if device == nil {
+		klog.Warningf("device is nil, cannot get provider attributes.")
 		return nil
 	}
 

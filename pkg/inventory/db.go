@@ -77,6 +77,9 @@ type DB struct {
 	// resourceapi.Device object that contains the device's attributes.
 	// The deviceStore is periodically updated by the Run method.
 	deviceStore map[string]resourceapi.Device
+	// deviceConfigStore caches cloud-provider network configuration per device.
+	// This helps us avoid repeatedly querying the provider APIs. Keyed by device name.
+	deviceConfigStore map[string]*apis.NetworkConfig
 
 	rateLimiter     *rate.Limiter
 	maxPollInterval time.Duration
@@ -100,11 +103,12 @@ func WithMaxPollInterval(d time.Duration) Option {
 
 func New(opts ...Option) *DB {
 	db := &DB{
-		podNetNsStore:   map[string]string{},
-		deviceStore:     map[string]resourceapi.Device{},
-		rateLimiter:     rate.NewLimiter(rate.Every(defaultMinPollInterval), defaultPollBurst),
-		notifications:   make(chan []resourceapi.Device),
-		maxPollInterval: defaultMaxPollInterval,
+		podNetNsStore:     map[string]string{},
+		deviceStore:       map[string]resourceapi.Device{},
+		deviceConfigStore: map[string]*apis.NetworkConfig{},
+		rateLimiter:       rate.NewLimiter(rate.Every(defaultMinPollInterval), defaultPollBurst),
+		notifications:     make(chan []resourceapi.Device),
+		maxPollInterval:   defaultMaxPollInterval,
 	}
 	for _, o := range opts {
 		o(db)
@@ -422,19 +426,47 @@ func (db *DB) addCloudAttributes(devices []resourceapi.Device) []resourceapi.Dev
 
 func (db *DB) updateDeviceStore(devices []resourceapi.Device) {
 	deviceStore := map[string]resourceapi.Device{}
+	deviceConfigStore := map[string]*apis.NetworkConfig{}
+
 	for _, device := range devices {
 		deviceStore[device.Name] = device
+
+		// Cache the configuration if the provider returns one.
+		if db.instance != nil {
+			id := cloudprovider.DeviceIdentifiers{
+				Name: device.Name,
+			}
+			if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
+				id.MAC = *macAttr.StringValue
+			}
+			if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
+				id.PCIAddress = *pciAttr.StringValue
+			}
+
+			if conf := db.instance.GetDeviceConfig(id); conf != nil {
+				deviceConfigStore[device.Name] = conf
+			}
+		}
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.deviceStore = deviceStore
+	db.deviceConfigStore = deviceConfigStore
 }
 
 func (db *DB) GetDevice(deviceName string) (resourceapi.Device, bool) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 	device, exists := db.deviceStore[deviceName]
 	return device, exists
+}
+
+// GetDeviceConfig returns the network configuration associated with the device, if any.
+func (db *DB) GetDeviceConfig(deviceName string) (*apis.NetworkConfig, bool) {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	conf, exists := db.deviceConfigStore[deviceName]
+	return conf, exists
 }
 
 // GetNetInterfaceName returns the network interface name for a given device. It

@@ -16,7 +16,10 @@ limitations under the License.
 
 package cloudprovider
 
-import resourceapi "k8s.io/api/resource/v1"
+import (
+	"github.com/google/dranet/pkg/apis"
+	resourceapi "k8s.io/api/resource/v1"
+)
 
 // DeviceIdentifiers contains locally discovered hardware identifiers
 // that a cloud provider can use to match against its metadata.
@@ -31,4 +34,8 @@ type CloudInstance interface {
 	// GetDeviceAttributes takes multiple identifiers, allowing the provider
 	// to choose the best way to match the local device to cloud metadata.
 	GetDeviceAttributes(id DeviceIdentifiers) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute
+
+	// GetDeviceConfig allows a cloud provider to return an infrastructure-specific
+	// network configuration for a given device.
+	GetDeviceConfig(id DeviceIdentifiers) *apis.NetworkConfig
 }
