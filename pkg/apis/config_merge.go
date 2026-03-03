@@ -1,0 +1,96 @@
+/*
+Copyright The Kubernetes Authors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package apis
+
+import (
+	"dario.cat/mergo"
+)
+
+// MergeNetworkConfig merges a cloud provider configuration into a user configuration.
+// It returns a new *NetworkConfig with the merged result.
+// It follows a strict "User wins" strategy: any scalar setting defined in the user config
+// overrides the cloud provider config. For slices, the two configurations are combined,
+// but duplicates are resolved in favor of the user config.
+// The user parameter is assumed to be non-nil. The cloud parameter can be nil, resulting in
+// a copy of the user parameter.
+func MergeNetworkConfig(user, cloud *NetworkConfig) *NetworkConfig {
+	if cloud == nil {
+		copy := *user
+		return &copy
+	}
+
+	merged := &NetworkConfig{}
+
+	// Start with the cloud configuration as the base
+	if err := mergo.Merge(merged, cloud); err != nil {
+		return &NetworkConfig{} // or log error? We'll just return nil or early? Let's just return what we have.
+	}
+
+	// Merge the user configuration on top, overriding cloud settings and appending slices.
+	if err := mergo.Merge(merged, user, mergo.WithOverride, mergo.WithAppendSlice); err != nil {
+		return &NetworkConfig{}
+	}
+
+	// Deduplicate slices where order or uniqueness matters.
+	// For addresses, we just unique them.
+	merged.Interface.Addresses = deduplicateStrings(merged.Interface.Addresses)
+
+	// For Routes, deduplicate by destination (user wins, which were appended last, so we iterate backwards).
+	merged.Routes = deduplicateRoutes(merged.Routes)
+	merged.Neighbors = deduplicateNeighbors(merged.Neighbors)
+
+	return merged
+}
+
+// deduplicateStrings compacts a slice of strings keeping the last occurrence
+func deduplicateStrings(s []string) []string {
+	seen := make(map[string]bool)
+	var res []string
+	for i := len(s) - 1; i >= 0; i-- {
+		if !seen[s[i]] {
+			seen[s[i]] = true
+			res = append([]string{s[i]}, res...)
+		}
+	}
+	return res
+}
+
+func deduplicateRoutes(routes []RouteConfig) []RouteConfig {
+	seen := make(map[string]bool)
+	var res []RouteConfig
+	for i := len(routes) - 1; i >= 0; i-- {
+		dest := routes[i].Destination
+		if !seen[dest] {
+			seen[dest] = true
+			res = append([]RouteConfig{routes[i]}, res...)
+		}
+	}
+	return res
+}
+
+func deduplicateNeighbors(neighbors []NeighborConfig) []NeighborConfig {
+	seen := make(map[string]bool)
+	var res []NeighborConfig
+	for i := len(neighbors) - 1; i >= 0; i-- {
+		dest := neighbors[i].Destination
+		if !seen[dest] {
+			seen[dest] = true
+			res = append([]NeighborConfig{neighbors[i]}, res...)
+		}
+	}
+	return res
+}

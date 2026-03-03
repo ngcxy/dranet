@@ -16,29 +16,26 @@ limitations under the License.
 
 package cloudprovider
 
-type CloudInstance struct {
-	Name                string
-	Type                string
-	Provider            CloudProvider
-	AcceleratorProtocol string
-	Interfaces          []NetworkInterface
-	Topology            string
-}
-
-type NetworkInterface struct {
-	IPv4      string   `json:"ip,omitempty"`
-	IPv6      []string `json:"ipv6,omitempty"`
-	Mac       string   `json:"mac,omitempty"`
-	MTU       int      `json:"mtu,omitempty"`
-	Network   string   `json:"network,omitempty"`
-	IPAliases []string `json:"ipAliases,omitempty"`
-}
-
-// CloudProvider represents the type of cloud provider.
-type CloudProvider string
-
-const (
-	CloudProviderGCE   CloudProvider = "GCE"
-	CloudProviderAWS   CloudProvider = "AWS"
-	CloudProviderAzure CloudProvider = "Azure"
+import (
+	"github.com/google/dranet/pkg/apis"
+	resourceapi "k8s.io/api/resource/v1"
 )
+
+// DeviceIdentifiers contains locally discovered hardware identifiers
+// that a cloud provider can use to match against its metadata.
+type DeviceIdentifiers struct {
+	MAC        string
+	PCIAddress string
+	Name       string
+}
+
+// CloudInstance defines the generic interface for all cloud providers.
+type CloudInstance interface {
+	// GetDeviceAttributes takes multiple identifiers, allowing the provider
+	// to choose the best way to match the local device to cloud metadata.
+	GetDeviceAttributes(id DeviceIdentifiers) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute
+
+	// GetDeviceConfig allows a cloud provider to return an infrastructure-specific
+	// network configuration for a given device.
+	GetDeviceConfig(id DeviceIdentifiers) *apis.NetworkConfig
+}
