@@ -184,7 +184,7 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			continue
 		}
 		requestName := result.Request
-		netconf := apis.NetworkConfig{}
+		userConf := &apis.NetworkConfig{}
 		for _, config := range claim.Status.Allocation.Devices.Config {
 			// Check there is a config associated to this device
 			if config.Opaque == nil ||
@@ -200,10 +200,20 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			}
 			// TODO: define a strategy for multiple configs
 			if conf != nil {
-				netconf = *conf
+				userConf = conf
 				break
 			}
 		}
+
+		// Get network configuration from the cloud provider (if any) and merge it with the user configuration.
+		// User configuration always takes precedence in case of conflicts.
+		cloudConf, ok := np.netdb.GetDeviceConfig(result.Device)
+		if ok && cloudConf != nil {
+			klog.V(4).Infof("Found cloud provider configuration for device %s: %#v", result.Device, cloudConf)
+		}
+		mergedConf := apis.MergeNetworkConfig(userConf, cloudConf)
+		netconf := *mergedConf
+
 		klog.V(4).Infof("PrepareResourceClaim %s/%s final Configuration %#v", claim.Namespace, claim.Name, netconf)
 		podCfg := PodConfig{
 			Claim: types.NamespacedName{

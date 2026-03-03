@@ -2,6 +2,8 @@ package driver
 
 import (
 	"context"
+
+	"github.com/google/dranet/pkg/apis"
 	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	registerapi "k8s.io/kubelet/pkg/apis/pluginregistration/v1"
@@ -68,4 +70,8 @@ func (m *fakeInventoryDB) RemovePodNetNs(podKey string) {
 
 func (m *fakeInventoryDB) GetPodNetNs(podKey string) string {
 	return m.podNetNs[podKey]
+}
+
+func (m *fakeInventoryDB) GetDeviceConfig(deviceName string) (*apis.NetworkConfig, bool) {
+	return nil, false
 }

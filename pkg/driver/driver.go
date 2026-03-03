@@ -63,6 +63,7 @@ type inventoryDB interface {
 	GetNetInterfaceName(string) (string, error)
 	IsIBOnlyDevice(deviceName string) bool
 	GetRDMADeviceName(deviceName string) (string, error)
+	GetDeviceConfig(deviceName string) (*apis.NetworkConfig, bool)
 	AddPodNetNs(podKey string, netNs string)
 	RemovePodNetNs(podKey string)
 	GetPodNetNs(podKey string) (netNs string)
