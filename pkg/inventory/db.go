@@ -422,9 +422,7 @@ func (db *DB) discoverRDMADevices(devices []resourceapi.Device) []resourceapi.De
 			isRDMA = len(rdmaDevices) != 0
 			if isRDMA {
 				// IB-only device: has RDMA capability but no netdev interface.
-				ibOnly := true
 				rdmaDevName := rdmaDevices[0]
-				devices[i].Attributes[apis.AttrIBOnly] = resourceapi.DeviceAttribute{BoolValue: &ibOnly}
 				devices[i].Attributes[apis.AttrRDMADevice] = resourceapi.DeviceAttribute{StringValue: &rdmaDevName}
 			}
 		}
@@ -518,14 +516,17 @@ func (db *DB) getNetInterfaceNameWithoutRescan(deviceName string) (string, error
 }
 
 // IsIBOnlyDevice returns true if the device has RDMA capability but no netdev
-// interface (i.e. an InfiniBand-only VF with no Ethernet/IPoIB netdev).
+// interface (i.e. an InfiniBand-only device). Derived from existing attributes:
+// a device with a non-empty rdmaDevice and no ifName is IB-only.
 func (db *DB) IsIBOnlyDevice(deviceName string) bool {
 	device, exists := db.GetDevice(deviceName)
 	if !exists {
 		return false
 	}
-	attr, ok := device.Attributes[apis.AttrIBOnly]
-	return ok && attr.BoolValue != nil && *attr.BoolValue
+	rdmaAttr := device.Attributes[apis.AttrRDMADevice]
+	ifAttr := device.Attributes[apis.AttrInterfaceName]
+	return rdmaAttr.StringValue != nil && *rdmaAttr.StringValue != "" &&
+		(ifAttr.StringValue == nil || *ifAttr.StringValue == "")
 }
 
 // GetRDMADeviceName returns the RDMA link name (e.g. "mlx5_0") for an IB-only

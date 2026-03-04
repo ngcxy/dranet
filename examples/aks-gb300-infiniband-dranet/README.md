@@ -33,7 +33,8 @@ The ConnectX VFs on GB300 are in **InfiniBand mode** — they have no Ethernet
 netdev interface. dranet discovers them as IB-only devices by:
 
 1. Skipping IPoIB interfaces during netdev discovery
-2. Marking the underlying PCI device as `ibOnly: true` with the RDMA link name
+2. Recording the RDMA link name (`rdmaDevice`) on the PCI device; a device is
+   IB-only when it has a non-empty `rdmaDevice` and no `ifName`
 3. At pod start, using the NRI plugin to inject exactly the allocated
    `/dev/infiniband/uverbsN` character device into the container
 
@@ -53,12 +54,15 @@ Without this, all four `uverbs*` devices would be visible in every pod
 
 **NIC** (driver: `dra.net`):
 
-| Device | pciAddress | rdmaDevice | NUMA | ibOnly |
-|---|---|---|---|---|
-| pci-0101-00-00-0 | 0101:00:00.0 | mlx5_0 | 0 | true |
-| pci-0102-00-00-0 | 0102:00:00.0 | mlx5_1 | 0 | true |
-| pci-0103-00-00-0 | 0103:00:00.0 | mlx5_2 | 1 | true |
-| pci-0104-00-00-0 | 0104:00:00.0 | mlx5_3 | 1 | true |
+| Device | pciAddress | rdmaDevice | NUMA |
+|---|---|---|---|
+| pci-0101-00-00-0 | 0101:00:00.0 | mlx5_0 | 0 |
+| pci-0102-00-00-0 | 0102:00:00.0 | mlx5_1 | 0 |
+| pci-0103-00-00-0 | 0103:00:00.0 | mlx5_2 | 1 |
+| pci-0104-00-00-0 | 0104:00:00.0 | mlx5_3 | 1 |
+
+These devices have no `ifName` attribute — IB-only status is derived at runtime
+from `rdmaDevice != "" && ifName == ""`.
 
 See `resourceslice-gpu.yaml` and `resourceslice-dranet.yaml` for the full
 ResourceSlice objects from a live node.

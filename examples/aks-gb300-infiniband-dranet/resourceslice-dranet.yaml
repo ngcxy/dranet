@@ -5,7 +5,7 @@ items:
   metadata:
     creationTimestamp: '2026-02-28T00:26:16Z'
     generateName: aks-user-34494392-vmss000000-dra.net-
-    generation: 10
+    generation: 11
     name: aks-user-34494392-vmss000000-dra.net-b8sbb
     ownerReferences:
     - apiVersion: v1
@@ -13,13 +13,11 @@ items:
       kind: Node
       name: aks-user-34494392-vmss000000
       uid: af90cd4f-d807-44d1-b41c-806a3def00fe
-    resourceVersion: '616284'
+    resourceVersion: '3093002'
     uid: 663bac96-31e0-4c60-8d60-17e6024c1a7d
   spec:
     devices:
     - attributes:
-        dra.net/ibOnly:
-          bool: true
         dra.net/numaNode:
           int: 0
         dra.net/pciAddress:
@@ -36,8 +34,6 @@ items:
           string: mlx5_0
       name: pci-0101-00-00-0
     - attributes:
-        dra.net/ibOnly:
-          bool: true
         dra.net/numaNode:
           int: 0
         dra.net/pciAddress:
@@ -54,8 +50,6 @@ items:
           string: mlx5_1
       name: pci-0102-00-00-0
     - attributes:
-        dra.net/ibOnly:
-          bool: true
         dra.net/numaNode:
           int: 1
         dra.net/pciAddress:
@@ -72,8 +66,6 @@ items:
           string: mlx5_2
       name: pci-0103-00-00-0
     - attributes:
-        dra.net/ibOnly:
-          bool: true
         dra.net/numaNode:
           int: 1
         dra.net/pciAddress:
@@ -130,4 +122,3 @@ items:
 kind: List
 metadata:
   resourceVersion: ''
-
