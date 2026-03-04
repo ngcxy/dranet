@@ -204,77 +204,9 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 
 		// Block 1: netdev operations — only when a network interface is present.
 		if ifName != "" {
-			klog.V(2).Infof("RunPodSandbox processing Network device: %s", ifName)
-			// TODO config options to rename the device and pass parameters
-			// use https://github.com/opencontainers/runtime-spec/pull/1271
-			networkData, err := nsAttachNetdev(ifName, ns, config.NetworkInterfaceConfigInPod.Interface)
-			if err != nil {
-				klog.Infof("RunPodSandbox error moving device %s to namespace %s: %v", deviceName, ns, err)
-				return fmt.Errorf("error moving network device %s to namespace %s: %v", deviceName, ns, err)
+			if err := attachNetdevToNS(pod, ns, deviceName, config, resourceClaimStatusDevice); err != nil {
+				return err
 			}
-
-			resourceClaimStatusDevice.WithConditions(
-				metav1apply.Condition().
-					WithType("Ready").
-					WithReason("NetworkDeviceReady").
-					WithStatus(metav1.ConditionTrue).
-					WithLastTransitionTime(metav1.Now()),
-			).WithNetworkData(resourceapply.NetworkDeviceData().
-				WithInterfaceName(networkData.InterfaceName).
-				WithHardwareAddress(networkData.HardwareAddress).
-				WithIPs(networkData.IPs...),
-			) // End of WithNetworkData
-
-			// The interface name inside the container's namespace.
-			ifNameInNs := networkData.InterfaceName
-
-			// Apply Ethtool configurations
-			if config.NetworkInterfaceConfigInPod.Ethtool != nil {
-				err = applyEthtoolConfig(ns, ifNameInNs, config.NetworkInterfaceConfigInPod.Ethtool)
-				if err != nil {
-					klog.Infof("RunPodSandbox error applying ethtool config for %s in ns %s: %v", ifNameInNs, ns, err)
-					return fmt.Errorf("error applying ethtool config for %s in ns %s: %v", ifNameInNs, ns, err)
-				}
-			}
-
-			// Check if the ebpf programs should be disabled
-			if config.NetworkInterfaceConfigInPod.Interface.DisableEBPFPrograms != nil &&
-				*config.NetworkInterfaceConfigInPod.Interface.DisableEBPFPrograms {
-				err := detachEBPFPrograms(ns, ifNameInNs)
-				if err != nil {
-					klog.Infof("error disabling ebpf programs for %s in ns %s: %v", ifNameInNs, ns, err)
-					return fmt.Errorf("error disabling ebpf programs for %s in ns %s: %v", ifNameInNs, ns, err)
-				}
-			}
-
-			// Configure routes
-			err = applyRoutingConfig(ns, ifNameInNs, config.NetworkInterfaceConfigInPod.Routes)
-			if err != nil {
-				klog.Infof("RunPodSandbox error configuring device %s namespace %s routing: %v", deviceName, ns, err)
-				return fmt.Errorf("error configuring device %s routes on namespace %s: %v", deviceName, ns, err)
-			}
-
-			// Configure rules
-			err = applyRulesConfig(ns, config.NetworkInterfaceConfigInPod.Rules)
-			if err != nil {
-				klog.Infof("RunPodSandbox error configuring device %s namespace %s rules: %v", deviceName, ns, err)
-				return fmt.Errorf("error configuring device %s rules on namespace %s: %v", deviceName, ns, err)
-			}
-
-			// Configure neighbors
-			err = applyNeighborConfig(ns, ifNameInNs, config.NetworkInterfaceConfigInPod.Neighbors)
-			if err != nil {
-				klog.Infof("RunPodSandbox for pod %s/%s (UID %s) failed to apply neighbor configuration for interface %s in namespace %s: %v", pod.Namespace, pod.Name, pod.Uid, ifNameInNs, ns, err)
-				return fmt.Errorf("failed to apply neighbor configuration for interface %s in namespace %s: %w", ifNameInNs, ns, err)
-			}
-
-			resourceClaimStatusDevice.WithConditions(
-				metav1apply.Condition().
-					WithType("NetworkReady").
-					WithStatus(metav1.ConditionTrue).
-					WithReason("NetworkReady").
-					WithLastTransitionTime(metav1.Now()),
-			)
 		}
 
 		// Block 2: RDMA link device — independent of whether a netdev exists.
@@ -295,7 +227,7 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 					WithLastTransitionTime(metav1.Now()),
 			)
 		}
-		// Ok
+		
 		resourceClaimStatus.WithDevices(resourceClaimStatusDevice)
 	}
 	// do not block the handler to update the status
@@ -316,6 +248,85 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 		}()
 	}
 
+	return nil
+}
+
+// attachNetdevToNS moves the host network interface into the pod network namespace,
+// applies all associated configuration (ethtool, eBPF, routes, rules, neighbors),
+// and records the resulting status conditions on resourceClaimStatusDevice.
+func attachNetdevToNS(pod *api.PodSandbox, ns, deviceName string, config PodConfig, resourceClaimStatusDevice *resourceapply.AllocatedDeviceStatusApplyConfiguration) error {
+	ifName := config.NetworkInterfaceConfigInHost.Interface.Name
+	klog.V(2).Infof("RunPodSandbox processing Network device: %s", ifName)
+	// TODO config options to rename the device and pass parameters
+	// use https://github.com/opencontainers/runtime-spec/pull/1271
+	networkData, err := nsAttachNetdev(ifName, ns, config.NetworkInterfaceConfigInPod.Interface)
+	if err != nil {
+		klog.Infof("RunPodSandbox error moving device %s to namespace %s: %v", deviceName, ns, err)
+		return fmt.Errorf("error moving network device %s to namespace %s: %v", deviceName, ns, err)
+	}
+
+	resourceClaimStatusDevice.WithConditions(
+		metav1apply.Condition().
+			WithType("Ready").
+			WithReason("NetworkDeviceReady").
+			WithStatus(metav1.ConditionTrue).
+			WithLastTransitionTime(metav1.Now()),
+	).WithNetworkData(resourceapply.NetworkDeviceData().
+		WithInterfaceName(networkData.InterfaceName).
+		WithHardwareAddress(networkData.HardwareAddress).
+		WithIPs(networkData.IPs...),
+	) // End of WithNetworkData
+
+	// The interface name inside the container's namespace.
+	ifNameInNs := networkData.InterfaceName
+
+	// Apply Ethtool configurations
+	if config.NetworkInterfaceConfigInPod.Ethtool != nil {
+		err = applyEthtoolConfig(ns, ifNameInNs, config.NetworkInterfaceConfigInPod.Ethtool)
+		if err != nil {
+			klog.Infof("RunPodSandbox error applying ethtool config for %s in ns %s: %v", ifNameInNs, ns, err)
+			return fmt.Errorf("error applying ethtool config for %s in ns %s: %v", ifNameInNs, ns, err)
+		}
+	}
+
+	// Check if the ebpf programs should be disabled
+	if config.NetworkInterfaceConfigInPod.Interface.DisableEBPFPrograms != nil &&
+		*config.NetworkInterfaceConfigInPod.Interface.DisableEBPFPrograms {
+		err := detachEBPFPrograms(ns, ifNameInNs)
+		if err != nil {
+			klog.Infof("error disabling ebpf programs for %s in ns %s: %v", ifNameInNs, ns, err)
+			return fmt.Errorf("error disabling ebpf programs for %s in ns %s: %v", ifNameInNs, ns, err)
+		}
+	}
+
+	// Configure routes
+	err = applyRoutingConfig(ns, ifNameInNs, config.NetworkInterfaceConfigInPod.Routes)
+	if err != nil {
+		klog.Infof("RunPodSandbox error configuring device %s namespace %s routing: %v", deviceName, ns, err)
+		return fmt.Errorf("error configuring device %s routes on namespace %s: %v", deviceName, ns, err)
+	}
+
+	// Configure rules
+	err = applyRulesConfig(ns, config.NetworkInterfaceConfigInPod.Rules)
+	if err != nil {
+		klog.Infof("RunPodSandbox error configuring device %s namespace %s rules: %v", deviceName, ns, err)
+		return fmt.Errorf("error configuring device %s rules on namespace %s: %v", deviceName, ns, err)
+	}
+
+	// Configure neighbors
+	err = applyNeighborConfig(ns, ifNameInNs, config.NetworkInterfaceConfigInPod.Neighbors)
+	if err != nil {
+		klog.Infof("RunPodSandbox for pod %s/%s (UID %s) failed to apply neighbor configuration for interface %s in namespace %s: %v", pod.Namespace, pod.Name, pod.Uid, ifNameInNs, ns, err)
+		return fmt.Errorf("failed to apply neighbor configuration for interface %s in namespace %s: %w", ifNameInNs, ns, err)
+	}
+
+	resourceClaimStatusDevice.WithConditions(
+		metav1apply.Condition().
+			WithType("NetworkReady").
+			WithStatus(metav1.ConditionTrue).
+			WithReason("NetworkReady").
+			WithLastTransitionTime(metav1.Now()),
+	)
 	return nil
 }
 
