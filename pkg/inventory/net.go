@@ -19,9 +19,9 @@ package inventory
 import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
-	"github.com/google/dranet/internal/nlwrap"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"

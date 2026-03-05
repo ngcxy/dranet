@@ -17,8 +17,8 @@ limitations under the License.
 package cloudprovider
 
 import (
-	"github.com/google/dranet/pkg/apis"
 	resourceapi "k8s.io/api/resource/v1"
+	"sigs.k8s.io/dranet/pkg/apis"
 )
 
 // DeviceIdentifiers contains locally discovered hardware identifiers

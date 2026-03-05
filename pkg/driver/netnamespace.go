@@ -23,11 +23,11 @@ import (
 	"slices"
 	"syscall"
 
-	"github.com/google/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/apis"
 
-	"github.com/google/dranet/internal/nlwrap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 )
 
 func applyRoutingConfig(containerNsPAth string, ifName string, routeConfig []apis.RouteConfig) error {

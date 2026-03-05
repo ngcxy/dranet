@@ -22,8 +22,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/dranet/pkg/apis"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/dranet/pkg/apis"
 )
 
 func TestNewPodConfigStore(t *testing.T) {

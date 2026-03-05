@@ -26,12 +26,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/dranet/pkg/apis"
-	"github.com/google/dranet/pkg/cloudprovider"
-	"github.com/google/dranet/pkg/names"
+	"sigs.k8s.io/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/cloudprovider"
+	"sigs.k8s.io/dranet/pkg/names"
 
 	"github.com/Mellanox/rdmamap"
-	"github.com/google/dranet/internal/nlwrap"
 	"github.com/jaypipes/ghw"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
@@ -41,6 +40,7 @@ import (
 	"k8s.io/dynamic-resource-allocation/deviceattribute"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 )
 
 const (

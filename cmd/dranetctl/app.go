@@ -24,10 +24,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/google/dranet/pkg/dranetctl/gke"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/dranet/pkg/dranetctl/gke"
 )
 
 var rootCmd = &cobra.Command{

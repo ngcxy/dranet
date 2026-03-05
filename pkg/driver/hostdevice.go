@@ -21,13 +21,13 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/google/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/apis"
 
-	"github.com/google/dranet/internal/nlwrap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/klog/v2"

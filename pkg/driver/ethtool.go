@@ -24,7 +24,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/google/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/apis"
 
 	"github.com/mdlayher/genetlink"
 	"github.com/mdlayher/netlink"

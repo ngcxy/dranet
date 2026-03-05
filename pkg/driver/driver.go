@@ -24,11 +24,11 @@ import (
 	"time"
 
 	"github.com/google/cel-go/cel"
-	"github.com/google/dranet/pkg/apis"
-	"github.com/google/dranet/pkg/inventory"
+	"sigs.k8s.io/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/inventory"
 
 	"github.com/containerd/nri/pkg/stub"
-	"github.com/google/dranet/internal/nlwrap"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/util/wait"

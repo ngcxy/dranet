@@ -24,13 +24,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/dranet/pkg/apis"
-	"github.com/google/dranet/pkg/filter"
+	"sigs.k8s.io/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/filter"
 
 	"github.com/Mellanox/rdmamap"
-	"github.com/google/dranet/internal/nlwrap"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/types"

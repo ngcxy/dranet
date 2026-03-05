@@ -26,11 +26,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/dranet/internal/nlwrap"
-	"github.com/google/dranet/pkg/apis"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/dranet/internal/nlwrap"
+	"sigs.k8s.io/dranet/pkg/apis"
 )
 
 func Test_nhNetdev(t *testing.T) {

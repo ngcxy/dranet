@@ -21,10 +21,10 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/google/dranet/internal/nlwrap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 )
 
 // Based on existing RDMA CNI plugin

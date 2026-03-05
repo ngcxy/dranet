@@ -25,10 +25,10 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
-	"github.com/google/dranet/internal/nlwrap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 )
 
 // unpinBPFPrograms runs in the host namespace to delete all the pinned bpf programs

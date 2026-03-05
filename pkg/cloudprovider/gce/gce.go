@@ -29,9 +29,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog/v2"
 
-	"github.com/google/dranet/pkg/apis"
-	"github.com/google/dranet/pkg/cloudprovider"
 	resourceapi "k8s.io/api/resource/v1"
+	"sigs.k8s.io/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/cloudprovider"
 )
 
 // GPUDirectSupport represents the type of GPUDirect support for a given machine type.

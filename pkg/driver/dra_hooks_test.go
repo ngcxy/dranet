@@ -22,13 +22,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/dranet/pkg/apis"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
-
+	"sigs.k8s.io/dranet/pkg/apis"
 )
 
 func TestPublishResourcesPrometheusMetrics(t *testing.T) {
@@ -277,4 +276,3 @@ func TestPublishResourcesMetrics(t *testing.T) {
 		}
 	})
 }
-

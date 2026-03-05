@@ -3,10 +3,10 @@ package driver
 import (
 	"context"
 
-	"github.com/google/dranet/pkg/apis"
 	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	registerapi "k8s.io/kubelet/pkg/apis/pluginregistration/v1"
+	"sigs.k8s.io/dranet/pkg/apis"
 )
 
 // fakeDraPlugin is a mock implementation of the pluginHelper interface for testing.

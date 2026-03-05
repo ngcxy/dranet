@@ -19,8 +19,8 @@ package driver
 import (
 	"sync"
 
-	"github.com/google/dranet/pkg/apis"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/dranet/pkg/apis"
 )
 
 // PodConfig holds the set of configurations to be applied for a single
