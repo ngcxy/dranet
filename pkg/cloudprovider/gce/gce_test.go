@@ -19,7 +19,7 @@ package gce
 import (
 	"testing"
 
-	"github.com/google/dranet/pkg/cloudprovider"
+	"sigs.k8s.io/dranet/pkg/cloudprovider"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"

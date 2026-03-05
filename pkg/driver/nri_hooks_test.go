@@ -22,9 +22,9 @@ import (
 	"testing"
 
 	"github.com/containerd/nri/pkg/api"
-	"github.com/google/dranet/pkg/inventory"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/dranet/pkg/inventory"
 )
 
 func TestCreateContainerNoDuplicateDevices(t *testing.T) {

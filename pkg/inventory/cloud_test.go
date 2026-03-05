@@ -19,13 +19,13 @@ package inventory
 import (
 	"testing"
 
-	"github.com/google/dranet/pkg/apis"
-	"github.com/google/dranet/pkg/cloudprovider"
-	"github.com/google/dranet/pkg/cloudprovider/gce"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/cloudprovider"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/gce"
 )
 
 // mockCloudInstance implements cloudprovider.CloudInstance for testing

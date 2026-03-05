@@ -23,8 +23,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/container/apiv1/containerpb"
-	"github.com/google/dranet/pkg/cloudprovider/gce"
 	"github.com/spf13/cobra"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/gce"
 
 	"k8s.io/klog/v2"
 )

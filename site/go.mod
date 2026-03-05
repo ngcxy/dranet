@@ -1,4 +1,4 @@
-module github.com/google/dranet
+module sigs.k8s.io/dranet
 
 go 1.23.4
 

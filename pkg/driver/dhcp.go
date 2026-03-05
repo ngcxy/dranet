@@ -21,11 +21,11 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/google/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/apis"
 
-	"github.com/google/dranet/internal/nlwrap"
 	"github.com/insomniacslk/dhcp/dhcpv4/nclient4"
 	"github.com/vishvananda/netlink"
+	"sigs.k8s.io/dranet/internal/nlwrap"
 )
 
 func getDHCP(ctx context.Context, ifName string) (ip string, routes []apis.RouteConfig, err error) {

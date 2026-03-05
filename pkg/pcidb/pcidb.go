@@ -21,8 +21,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/google/dranet/third_party"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/dranet/third_party"
 )
 
 var (

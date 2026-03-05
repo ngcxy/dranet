@@ -31,11 +31,11 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/ext"
-	"github.com/google/dranet/pkg/driver"
-	"github.com/google/dranet/pkg/inventory"
-	"github.com/google/dranet/pkg/pcidb"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
+	"sigs.k8s.io/dranet/pkg/driver"
+	"sigs.k8s.io/dranet/pkg/inventory"
+	"sigs.k8s.io/dranet/pkg/pcidb"
 
 	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/client-go/kubernetes"

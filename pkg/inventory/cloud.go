@@ -24,10 +24,10 @@ import (
 
 	"k8s.io/klog/v2"
 
-	"github.com/google/dranet/pkg/apis"
-	"github.com/google/dranet/pkg/cloudprovider"
-	"github.com/google/dranet/pkg/cloudprovider/gce"
 	resourceapi "k8s.io/api/resource/v1"
+	"sigs.k8s.io/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/cloudprovider"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/gce"
 )
 
 // getInstanceProperties get the instace properties and stores them in a global variable to be used in discovery
