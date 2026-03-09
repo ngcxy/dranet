@@ -66,6 +66,7 @@ image-build: ensure-buildx
 
 image-push: ensure-buildx
 	docker buildx build . \
+		--platform=$(PLATFORMS) \
 		--tag="${IMAGE}" \
 		--push
 
