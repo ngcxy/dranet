@@ -12,7 +12,7 @@ spec:
           count: 1
           selectors:
           - cel:
-              expression: 'device.attributes["resource.kubernetes.io"]["pciBusID"] == "0008:06:00.0"'
+              expression: 'device.attributes["resource.kubernetes.io"].pciBusID == "0008:06:00.0"'
       - name: nic
         exactly:
           deviceClassName: dranet.net
@@ -35,7 +35,7 @@ spec:
           count: 1
           selectors:
           - cel:
-              expression: 'device.attributes["resource.kubernetes.io"]["pciBusID"] == "0008:06:00.0"'
+              expression: 'device.attributes["resource.kubernetes.io"].pciBusID == "0008:06:00.0"'
       - name: nic
         exactly:
           deviceClassName: dranet.net
@@ -58,7 +58,7 @@ spec:
           count: 1
           selectors:
           - cel:
-              expression: 'device.attributes["resource.kubernetes.io"]["pciBusID"] == "0008:06:00.0"'
+              expression: 'device.attributes["resource.kubernetes.io"].pciBusID == "0008:06:00.0"'
       - name: nic
         exactly:
           deviceClassName: dranet.net

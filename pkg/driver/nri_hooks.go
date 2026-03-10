@@ -84,10 +84,7 @@ func (np *NetworkDriver) createContainer(_ context.Context, _ *api.PodSandbox, _
 	devPaths := set.Set[string]{}
 	adjust := &api.ContainerAdjustment{}
 
-	// Track status updates for RDMA-only devices, deduplicated per claim.
-	statusUpdates := map[types.NamespacedName]*resourceapply.ResourceClaimStatusApplyConfiguration{}
-
-	for deviceName, config := range podConfig {
+	for _, config := range podConfig {
 		for _, dev := range config.RDMADevice.DevChars {
 			// do not insert the same path multiple times
 			if devPaths.Has(dev.Path) {
@@ -102,48 +99,6 @@ func (np *NetworkDriver) createContainer(_ context.Context, _ *api.PodSandbox, _
 				Minor: dev.Minor,
 			})
 		}
-
-		// Emit Ready status for RDMA-only devices (no netdev) after char device
-		// injection. This is the correct point: the devices are now accessible.
-		ibOnly := config.RDMADevice.LinkDev != "" && config.NetworkInterfaceConfigInHost.Interface.Name == ""
-		if ibOnly {
-			resourceClaim := types.NamespacedName{Name: config.Claim.Name, Namespace: config.Claim.Namespace}
-			resourceClaimStatus := statusUpdates[resourceClaim]
-			if resourceClaimStatus == nil {
-				resourceClaimStatus = resourceapply.ResourceClaimStatus()
-				statusUpdates[resourceClaim] = resourceClaimStatus
-			}
-			resourceClaimStatusDevice := resourceapply.
-				AllocatedDeviceStatus().
-				WithDevice(deviceName).
-				WithDriver(np.driverName).
-				WithPool(np.nodeName).
-				WithConditions(
-					metav1apply.Condition().
-						WithType("Ready").
-						WithReason("RDMAOnlyDeviceReady").
-						WithStatus(metav1.ConditionTrue).
-						WithLastTransitionTime(metav1.Now()),
-				)
-			resourceClaimStatus.WithDevices(resourceClaimStatusDevice)
-		}
-	}
-
-	for claim, claimStatus := range statusUpdates {
-		resourceClaimApply := resourceapply.ResourceClaim(claim.Name, claim.Namespace).WithStatus(claimStatus)
-		go func() {
-			ctxStatus, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			_, err := np.kubeClient.ResourceV1().ResourceClaims(claim.Namespace).ApplyStatus(ctxStatus,
-				resourceClaimApply,
-				metav1.ApplyOptions{FieldManager: np.driverName, Force: true},
-			)
-			if err != nil {
-				klog.Infof("failed to update status for claim %s/%s : %v", claim.Namespace, claim.Name, err)
-			} else {
-				klog.V(4).Infof("updated status for claim %s/%s", claim.Namespace, claim.Name)
-			}
-		}()
 	}
 
 	return adjust, nil, nil
@@ -213,19 +168,20 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 		// For IB-only devices (no netdev) this is the only operation here;
 		// for RoCE (netdev + RDMA) it runs after the netdev block above.
 		if !np.rdmaSharedMode && config.RDMADevice.LinkDev != "" {
-			klog.V(2).Infof("RunPodSandbox processing RDMA device: %s", config.RDMADevice.LinkDev)
-			err := nsAttachRdmadev(config.RDMADevice.LinkDev, ns)
-			if err != nil {
-				klog.Infof("RunPodSandbox error getting RDMA device %s to namespace %s: %v", config.RDMADevice.LinkDev, ns, err)
-				return fmt.Errorf("error moving RDMA device %s to namespace %s: %v", config.RDMADevice.LinkDev, ns, err)
+			if err := attachRdmaToNS(config.RDMADevice.LinkDev, ns, resourceClaimStatusDevice); err != nil {
+				return err
 			}
-			resourceClaimStatusDevice.WithConditions(
-				metav1apply.Condition().
-					WithType("RDMALinkReady").
-					WithStatus(metav1.ConditionTrue).
-					WithReason("RDMALinkReady").
-					WithLastTransitionTime(metav1.Now()),
-			)
+			// For IB-only devices (no netdev), emit the top-level Ready condition.
+			// RunPodSandbox runs once per pod, so this fires exactly once per claim.
+			if ifName == "" {
+				resourceClaimStatusDevice.WithConditions(
+					metav1apply.Condition().
+						WithType("Ready").
+						WithReason("RDMAOnlyDeviceReady").
+						WithStatus(metav1.ConditionTrue).
+						WithLastTransitionTime(metav1.Now()),
+				)
+			}
 		}
 		
 		resourceClaimStatus.WithDevices(resourceClaimStatusDevice)
@@ -248,6 +204,24 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 		}()
 	}
 
+	return nil
+}
+
+// attachRdmaToNS moves the RDMA link device into the pod network namespace and
+// records the RDMALinkReady status condition on resourceClaimStatusDevice.
+func attachRdmaToNS(linkDev, ns string, resourceClaimStatusDevice *resourceapply.AllocatedDeviceStatusApplyConfiguration) error {
+	klog.V(2).Infof("RunPodSandbox processing RDMA device: %s", linkDev)
+	if err := nsAttachRdmadev(linkDev, ns); err != nil {
+		klog.Infof("RunPodSandbox error getting RDMA device %s to namespace %s: %v", linkDev, ns, err)
+		return fmt.Errorf("error moving RDMA device %s to namespace %s: %v", linkDev, ns, err)
+	}
+	resourceClaimStatusDevice.WithConditions(
+		metav1apply.Condition().
+			WithType("RDMALinkReady").
+			WithStatus(metav1.ConditionTrue).
+			WithReason("RDMALinkReady").
+			WithLastTransitionTime(metav1.Now()),
+	)
 	return nil
 }
 
