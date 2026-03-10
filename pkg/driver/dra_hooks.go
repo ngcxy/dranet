@@ -244,17 +244,7 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 				errorList = append(errorList, fmt.Errorf("failed to get RDMA device name for IB-only device %s: %v", result.Device, err))
 				continue
 			}
-			podCfg.RDMADevice.LinkDev = rdmaDevName
-			charDevices.Insert(rdmaCmPath)
-			charDevices.Insert(rdmamap.GetRdmaCharDevices(rdmaDevName)...)
-			for _, devpath := range charDevices.UnsortedList() {
-				dev, err := GetDeviceInfo(devpath)
-				if err != nil {
-					klog.Infof("fail to get device info for %s : %v", devpath, err)
-				} else {
-					podCfg.RDMADevice.DevChars = append(podCfg.RDMADevice.DevChars, dev)
-				}
-			}
+			podCfg.RDMADevice = buildRDMAConfig(rdmaDevName, charDevices)
 			for _, uid := range podUIDs {
 				np.podConfigStore.Set(uid, result.Device, podCfg)
 			}
@@ -383,18 +373,7 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 		// Get RDMA configuration: link and char devices
 		if rdmaDev, _ := rdmamap.GetRdmaDeviceForNetdevice(ifName); rdmaDev != "" {
 			klog.V(2).Infof("RunPodSandbox processing RDMA device: %s", rdmaDev)
-			podCfg.RDMADevice.LinkDev = rdmaDev
-			// Obtain the char devices associated to the rdma device
-			charDevices.Insert(rdmaCmPath)
-			charDevices.Insert(rdmamap.GetRdmaCharDevices(rdmaDev)...)
-			for _, devpath := range charDevices.UnsortedList() {
-				dev, err := GetDeviceInfo(devpath)
-				if err != nil {
-					klog.Infof("fail to get device info for %s : %v", devpath, err)
-				} else {
-					podCfg.RDMADevice.DevChars = append(podCfg.RDMADevice.DevChars, dev)
-				}
-			}
+			podCfg.RDMADevice = buildRDMAConfig(rdmaDev, charDevices)
 		}
 
 		// Remove the pinned programs before the NRI hooks since it
@@ -490,6 +469,24 @@ func formatDeviceNames(devices []resourceapi.Device, max int) string {
 	}
 
 	return fmt.Sprintf("%s, and %d more", strings.Join(deviceNames[:max], ", "), len(deviceNames)-max)
+}
+
+// buildRDMAConfig populates an RDMAConfig for the given rdma device name.
+// It inserts the rdma_cm and per-device character device paths into charDevices,
+// then resolves each path to a LinuxDevice entry.
+func buildRDMAConfig(rdmaDevName string, charDevices sets.Set[string]) RDMAConfig {
+	cfg := RDMAConfig{LinkDev: rdmaDevName}
+	charDevices.Insert(rdmaCmPath)
+	charDevices.Insert(rdmamap.GetRdmaCharDevices(rdmaDevName)...)
+	for _, devpath := range charDevices.UnsortedList() {
+		dev, err := GetDeviceInfo(devpath)
+		if err != nil {
+			klog.Infof("fail to get device info for %s : %v", devpath, err)
+		} else {
+			cfg.DevChars = append(cfg.DevChars, dev)
+		}
+	}
+	return cfg
 }
 
 // getRuleInfo lists all IP rules in the host network namespace and groups them
