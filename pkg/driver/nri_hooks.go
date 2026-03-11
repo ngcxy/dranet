@@ -171,19 +171,22 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 			if err := attachRdmaToNS(config.RDMADevice.LinkDev, ns, resourceClaimStatusDevice); err != nil {
 				return err
 			}
-			// For IB-only devices (no netdev), emit the top-level Ready condition.
-			// RunPodSandbox runs once per pod, so this fires exactly once per claim.
-			if ifName == "" {
-				resourceClaimStatusDevice.WithConditions(
-					metav1apply.Condition().
-						WithType("Ready").
-						WithReason("RDMAOnlyDeviceReady").
-						WithStatus(metav1.ConditionTrue).
-						WithLastTransitionTime(metav1.Now()),
-				)
-			}
 		}
-		
+
+		// Block 3: Status conditions for IB-only devices (no netdev).
+		// In exclusive RDMA mode the RDMA link was moved above; in shared mode
+		// char-device injection (createContainer) is sufficient. Either way the
+		// device is ready, so emit the condition unconditionally.
+		if ifName == "" && config.RDMADevice.LinkDev != "" {
+			resourceClaimStatusDevice.WithConditions(
+				metav1apply.Condition().
+					WithType("Ready").
+					WithReason("RDMAOnlyDeviceReady").
+					WithStatus(metav1.ConditionTrue).
+					WithLastTransitionTime(metav1.Now()),
+			)
+		}
+
 		resourceClaimStatus.WithDevices(resourceClaimStatusDevice)
 	}
 	// do not block the handler to update the status
