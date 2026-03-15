@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Mellanox/rdmamap"
 	"k8s.io/klog/v2"
 )
 
@@ -111,7 +112,52 @@ func isSriovVf(name string, syspath string) bool {
 	return info.Mode()&os.ModeSymlink != 0
 }
 
-// hasRDMADeviceInSysfs checks if a network interface has RDMA capability by
+// GetRdmaDevice returns the RDMA device name for a given network interface by
+// first checking GetRdmaDeviceForNetdevice. If rdmamap fails, it falls back to
+// checking the sysfs infiniband directory. This serves as a workaround for
+// cases where the rdmamap library fails to detect RDMA devices, particularly
+// for InfiniBand interfaces where the library incorrectly compares against the
+// node GUID instead of the port GUID.
+func GetRdmaDevice(ifName string) (string, error) {
+	if rdmaDev, _ := rdmamap.GetRdmaDeviceForNetdevice(ifName); rdmaDev != "" {
+		return rdmaDev, nil
+	}
+
+	// Fallback to sysfs check if rdmamap fails. This is particularly related to a known
+	// issue to detect RDMA devices for certain Mellanox NICs
+	// https://github.com/Mellanox/rdmamap/issues/15
+
+	rdmaDev, err := getRdmaDeviceFromSysfs(sysnetPath, ifName)
+	if err != nil {
+		return "", fmt.Errorf("no RDMA device found for %s: %w", ifName, err)
+	}
+
+	return rdmaDev, nil
+}
+
+// getRdmaDeviceFromSysfs function checks /sys/class/net/{ifname}/device/infiniband/ for any RDMA
+// device entries. If the directory exists and contains at least one entry,
+// it returns the name of the first RDMA device found.
+// If the directory does not exist or contains no entries, it returns an error indicating
+// that no RDMA device was found for the specified interface.
+
+func getRdmaDeviceFromSysfs(basePath, ifName string) (string, error) {
+	rdmaDir := filepath.Join(basePath, ifName, "device", "infiniband")
+	entries, err := os.ReadDir(rdmaDir)
+	if err != nil {
+		return "", fmt.Errorf("no RDMA device for %s: %w", ifName, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			klog.V(4).Infof("Found RDMA device %s for interface %s via sysfs", entry.Name(), ifName)
+			return entry.Name(), nil // Return first RDMA device found (e.g., "mlx5_0")
+		}
+	}
+	return "", fmt.Errorf("no RDMA device found for %s", ifName)
+}
+
+// isRdmaDeviceInSysfs checks if a network interface has RDMA capability by
 // examining the sysfs infiniband directory. This serves as a workaround for
 // cases where the rdmamap library fails to detect RDMA devices, particularly
 // for InfiniBand interfaces where the library incorrectly compares against the
@@ -120,22 +166,16 @@ func isSriovVf(name string, syspath string) bool {
 // The function checks /sys/class/net/{ifname}/device/infiniband/ for any RDMA
 // device entries. If the directory exists and contains at least one entry, the
 // interface is considered RDMA-capable.
-func hasRDMADeviceInSysfs(ifName string) bool {
+func isRdmaDeviceInSysfs(ifName string) bool {
 	// Check if the infiniband directory exists under the device
-	ibPath := filepath.Join(sysnetPath, ifName, "device", "infiniband")
-	entries, err := os.ReadDir(ibPath)
+	rdmaName, err := getRdmaDeviceFromSysfs(sysnetPath, ifName)
 	if err != nil {
-		// Directory doesn't exist or can't be read
+		klog.V(4).Infof("No RDMA device found for interface %s via sysfs: %v", ifName, err)
 		return false
 	}
-	// If there's at least one entry (RDMA device), return true
-	for _, entry := range entries {
-		if entry.IsDir() {
-			klog.V(4).Infof("Found RDMA device %s for interface %s via sysfs", entry.Name(), ifName)
-			return true
-		}
-	}
-	return false
+
+	klog.V(4).Infof("Interface %s is RDMA-capable with device %s", ifName, rdmaName)
+	return true
 }
 
 // pciAddress BDF Notation

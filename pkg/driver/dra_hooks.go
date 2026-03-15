@@ -26,6 +26,7 @@ import (
 
 	"sigs.k8s.io/dranet/pkg/apis"
 	"sigs.k8s.io/dranet/pkg/filter"
+	"sigs.k8s.io/dranet/pkg/inventory"
 
 	"github.com/Mellanox/rdmamap"
 	"github.com/vishvananda/netlink"
@@ -222,6 +223,36 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			},
 			NetworkInterfaceConfigInPod: netconf,
 		}
+
+		// IB-only path: device has RDMA capability but no netdev interface.
+		if np.netdb.IsIBOnlyDevice(result.Device) {
+			// Reject any network-specific config fields for RDMA-only devices.
+			for _, config := range claim.Status.Allocation.Devices.Config {
+				if config.Opaque == nil ||
+					config.Opaque.Driver != np.driverName ||
+					len(config.Requests) > 0 && !slices.Contains(config.Requests, requestName) {
+					continue
+				}
+				if errs := apis.ValidateRDMAOnlyConfig(&config.Opaque.Parameters); len(errs) > 0 {
+					errorList = append(errorList, errs...)
+				}
+			}
+			if len(errorList) > 0 {
+				continue
+			}
+			rdmaDevName, err := np.netdb.GetRDMADeviceName(result.Device)
+			if err != nil {
+				errorList = append(errorList, fmt.Errorf("failed to get RDMA device name for IB-only device %s: %v", result.Device, err))
+				continue
+			}
+			podCfg.RDMADevice = buildRDMAConfig(rdmaDevName, charDevices)
+			for _, uid := range podUIDs {
+				np.podConfigStore.Set(uid, result.Device, podCfg)
+			}
+			klog.V(4).Infof("IB-only claim resources for pods %v : %#v", podUIDs, podCfg)
+			continue
+		}
+
 		ifName, err := np.netdb.GetNetInterfaceName(result.Device)
 		if err != nil {
 			errorList = append(errorList, fmt.Errorf("failed to get network interface name for device %s: %v", result.Device, err))
@@ -341,20 +372,9 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 		}
 
 		// Get RDMA configuration: link and char devices
-		if rdmaDev, _ := rdmamap.GetRdmaDeviceForNetdevice(ifName); rdmaDev != "" {
+		if rdmaDev, err := inventory.GetRdmaDevice(ifName); err == nil && rdmaDev != "" {
 			klog.V(2).Infof("RunPodSandbox processing RDMA device: %s", rdmaDev)
-			podCfg.RDMADevice.LinkDev = rdmaDev
-			// Obtain the char devices associated to the rdma device
-			charDevices.Insert(rdmaCmPath)
-			charDevices.Insert(rdmamap.GetRdmaCharDevices(rdmaDev)...)
-			for _, devpath := range charDevices.UnsortedList() {
-				dev, err := GetDeviceInfo(devpath)
-				if err != nil {
-					klog.Infof("fail to get device info for %s : %v", devpath, err)
-				} else {
-					podCfg.RDMADevice.DevChars = append(podCfg.RDMADevice.DevChars, dev)
-				}
-			}
+			podCfg.RDMADevice = buildRDMAConfig(rdmaDev, charDevices)
 		}
 
 		// Remove the pinned programs before the NRI hooks since it
@@ -450,6 +470,24 @@ func formatDeviceNames(devices []resourceapi.Device, max int) string {
 	}
 
 	return fmt.Sprintf("%s, and %d more", strings.Join(deviceNames[:max], ", "), len(deviceNames)-max)
+}
+
+// buildRDMAConfig populates an RDMAConfig for the given rdma device name.
+// It inserts the rdma_cm and per-device character device paths into charDevices,
+// then resolves each path to a LinuxDevice entry.
+func buildRDMAConfig(rdmaDevName string, charDevices sets.Set[string]) RDMAConfig {
+	cfg := RDMAConfig{LinkDev: rdmaDevName}
+	charDevices.Insert(rdmaCmPath)
+	charDevices.Insert(rdmamap.GetRdmaCharDevices(rdmaDevName)...)
+	for _, devpath := range charDevices.UnsortedList() {
+		dev, err := GetDeviceInfo(devpath)
+		if err != nil {
+			klog.Infof("fail to get device info for %s : %v", devpath, err)
+		} else {
+			cfg.DevChars = append(cfg.DevChars, dev)
+		}
+	}
+	return cfg
 }
 
 // getRuleInfo lists all IP rules in the host network namespace and groups them
