@@ -156,8 +156,8 @@ func TestIsSriovVf(t *testing.T) {
 		createDeviceDir(t, "eth0")
 		want := false
 		got := isSriovVf("eth0", syspath)
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("isSriovVf() mismatch (-want +got):\n%s", diff)
+		if want != got {
+			t.Errorf("isSriovVf() mismatch (-want +got):\n- %t\n+ %t", want, got)
 		}
 	})
 
@@ -172,8 +172,8 @@ func TestIsSriovVf(t *testing.T) {
 		}
 		want := true
 		got := isSriovVf("eth1", syspath)
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("isSriovVf() mismatch (-want +got):\n%s", diff)
+		if want != got {
+			t.Errorf("isSriovVf() mismatch (-want +got):\n- %t\n+ %t", want, got)
 		}
 	})
 
@@ -184,8 +184,8 @@ func TestIsSriovVf(t *testing.T) {
 		}
 		want := false
 		got := isSriovVf("eth2", syspath)
-		if diff := cmp.Diff(want, got); diff != "" {
-			t.Errorf("isSriovVf() mismatch (-want +got):\n%s", diff)
+		if want != got {
+			t.Errorf("isSriovVf() mismatch (-want +got):\n- %t\n+ %t", want, got)
 		}
 	})
 }
