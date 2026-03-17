@@ -101,6 +101,17 @@ func sriovNumVFs(name string) int {
 	return t
 }
 
+// isSriovVf reports whether a network interface is a SR-IOV Virtual Function.
+// In sysfs this is exposed as a "physfn" symlink under the PCI device.
+func isSriovVf(name string, syspath string) bool {
+	physfnPath := filepath.Join(syspath, name, "device", "physfn")
+	info, err := os.Lstat(physfnPath)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSymlink != 0
+}
+
 // GetRdmaDevice returns the RDMA device name for a given network interface by
 // first checking GetRdmaDeviceForNetdevice. If rdmamap fails, it falls back to
 // checking the sysfs infiniband directory. This serves as a workaround for

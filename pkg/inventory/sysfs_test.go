@@ -140,6 +140,56 @@ func TestPCIAddressFromPath(t *testing.T) {
 	}
 }
 
+func TestIsSriovVf(t *testing.T) {
+	syspath := t.TempDir()
+
+	createDeviceDir := func(t *testing.T, ifName string) string {
+		t.Helper()
+		deviceDir := filepath.Join(syspath, ifName, "device")
+		if err := os.MkdirAll(deviceDir, 0o755); err != nil {
+			t.Fatalf("failed to create device directory for %q: %v", ifName, err)
+		}
+		return deviceDir
+	}
+
+	t.Run("missing physfn", func(t *testing.T) {
+		createDeviceDir(t, "eth0")
+		want := false
+		got := isSriovVf("eth0", syspath)
+		if want != got {
+			t.Errorf("isSriovVf() mismatch (-want +got):\n- %t\n+ %t", want, got)
+		}
+	})
+
+	t.Run("physfn symlink exists", func(t *testing.T) {
+		deviceDir := createDeviceDir(t, "eth1")
+		pfDir := filepath.Join(syspath, "pf0")
+		if err := os.MkdirAll(pfDir, 0o755); err != nil {
+			t.Fatalf("failed to create pf directory: %v", err)
+		}
+		if err := os.Symlink(pfDir, filepath.Join(deviceDir, "physfn")); err != nil {
+			t.Fatalf("failed to create physfn symlink: %v", err)
+		}
+		want := true
+		got := isSriovVf("eth1", syspath)
+		if want != got {
+			t.Errorf("isSriovVf() mismatch (-want +got):\n- %t\n+ %t", want, got)
+		}
+	})
+
+	t.Run("physfn exists but is not symlink", func(t *testing.T) {
+		deviceDir := createDeviceDir(t, "eth2")
+		if err := os.WriteFile(filepath.Join(deviceDir, "physfn"), []byte("not-a-symlink"), 0o644); err != nil {
+			t.Fatalf("failed to create physfn file: %v", err)
+		}
+		want := false
+		got := isSriovVf("eth2", syspath)
+		if want != got {
+			t.Errorf("isSriovVf() mismatch (-want +got):\n- %t\n+ %t", want, got)
+		}
+	})
+}
+
 // TestGetRdmaDeviceFromSysfs tests the getRdmaDeviceFromSysfs function
 func TestGetRdmaDeviceFromSysfs(t *testing.T) {
 	testCases := []struct {
