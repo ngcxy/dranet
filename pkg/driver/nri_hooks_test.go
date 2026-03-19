@@ -47,13 +47,13 @@ func TestCreateContainerNoDuplicateDevices(t *testing.T) {
 		{Path: "/dev/infiniband/uverbs0", Type: "c", Major: 231, Minor: 192},
 	}
 
-	podConfig := PodConfig{
+	deviceCfg := DeviceConfig{
 		RDMADevice: RDMAConfig{
 			DevChars: rdmaDevChars,
 		},
 	}
-	np.podConfigStore.Set(podUID, "eth0", podConfig)
-	np.podConfigStore.Set(podUID, "eth1", podConfig)
+	np.podConfigStore.SetDeviceConfig(podUID, "eth0", deviceCfg)
+	np.podConfigStore.SetDeviceConfig(podUID, "eth1", deviceCfg)
 
 	adjust, _, err := np.CreateContainer(context.Background(), pod, ctr)
 	if err != nil {
@@ -188,7 +188,7 @@ func TestRunPodSandboxMetrics(t *testing.T) {
 
 			// For the failure case, a pod config must exist.
 			if !tc.expectSuccess {
-				tc.podConfigStore.Set(podUIDHostNetwork, "eth0", PodConfig{})
+				tc.podConfigStore.SetDeviceConfig(podUIDHostNetwork, "eth0", DeviceConfig{})
 			}
 
 			np.RunPodSandbox(context.Background(), tc.pod)
