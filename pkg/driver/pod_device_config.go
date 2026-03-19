@@ -18,6 +18,7 @@ package driver
 
 import (
 	"sync"
+	"time"
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/dranet/pkg/apis"
@@ -29,6 +30,10 @@ type PodConfig struct {
 	// DeviceConfigs maps the allocated network device names to their respective
 	// configurations.
 	DeviceConfigs map[string]DeviceConfig
+
+	// LastNRIActivity timestamp is updated whenever an NRI hook processes
+	// a container for this Pod. Used to track pod initialization progress.
+	LastNRIActivity time.Time
 }
 
 // DeviceConfig holds the set of configurations to be applied for a single
@@ -90,6 +95,28 @@ func NewPodConfigStore() *PodConfigStore {
 	}
 }
 
+// UpdateLastNRIActivity updates the LastNRIActivity timestamp for a given Pod UID.
+// If the PodConfig doesn't exist, it does nothing.
+func (s *PodConfigStore) UpdateLastNRIActivity(podUID types.UID, timestamp time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if podConfig, ok := s.configs[podUID]; ok {
+		podConfig.LastNRIActivity = timestamp
+		s.configs[podUID] = podConfig
+	}
+}
+
+// GetPodNRIActivities returns a map of Pod UIDs to their last NRI activity timestamp.
+func (s *PodConfigStore) GetPodNRIActivities() map[types.UID]time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	activities := make(map[types.UID]time.Time, len(s.configs))
+	for uid, config := range s.configs {
+		activities[uid] = config.LastNRIActivity
+	}
+	return activities
+}
+
 // SetDeviceConfig stores the configuration for a specific device under a given Pod UID.
 // If a configuration for the Pod UID or device name already exists, it will be overwritten.
 func (s *PodConfigStore) SetDeviceConfig(podUID types.UID, deviceName string, config DeviceConfig) {
@@ -138,11 +165,15 @@ func (s *PodConfigStore) GetPodConfig(podUID types.UID) (PodConfig, bool) {
 	for k, v := range podConfig.DeviceConfigs {
 		configsCopy[k] = v
 	}
-	return PodConfig{DeviceConfigs: configsCopy}, true
+	return PodConfig{
+		DeviceConfigs:   configsCopy,
+		LastNRIActivity: podConfig.LastNRIActivity,
+	}, true
 }
 
-// DeleteClaim removes all configurations associated with a given claim.
-func (s *PodConfigStore) DeleteClaim(claim types.NamespacedName) {
+// DeleteClaim removes all configurations associated with a given claim and
+// returns the list of Pod UIDs that were associated with it.
+func (s *PodConfigStore) DeleteClaim(claim types.NamespacedName) []types.UID {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	podsToDelete := []types.UID{}
@@ -158,4 +189,5 @@ func (s *PodConfigStore) DeleteClaim(claim types.NamespacedName) {
 	for _, uid := range podsToDelete {
 		delete(s.configs, uid)
 	}
+	return podsToDelete
 }
