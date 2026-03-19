@@ -23,10 +23,18 @@ import (
 	"sigs.k8s.io/dranet/pkg/apis"
 )
 
-// PodConfig holds the set of configurations to be applied for a single
+// PodConfig holds all the device configurations for a Pod, and can be extended
+// with fields that are not specific to a single device.
+type PodConfig struct {
+	// DeviceConfigs maps the allocated network device names to their respective
+	// configurations.
+	DeviceConfigs map[string]DeviceConfig
+}
+
+// DeviceConfig holds the set of configurations to be applied for a single
 // network device allocated to a Pod. This includes network interface settings,
 // routes for the Pod's network namespace, and RDMA configurations.
-type PodConfig struct {
+type DeviceConfig struct {
 	Claim types.NamespacedName
 
 	// NetworkInterfaceConfigInHost is the config of the network interface as
@@ -68,42 +76,45 @@ type LinuxDevice struct {
 	GID      uint32
 }
 
-// PodConfigStore provides a thread-safe, centralized store for all network device configurations
-// across multiple Pods. It is indexed by the Pod's UID, and for each Pod, it maps
-// network device names (as allocated) to their specific Config.
+// PodConfigStore provides a thread-safe, centralized store for all network
+// device configurations across multiple Pods. It is indexed by the Pod's UID.
 type PodConfigStore struct {
 	mu      sync.RWMutex
-	configs map[types.UID]map[string]PodConfig
+	configs map[types.UID]PodConfig
 }
 
 // NewPodConfigStore creates and returns a new instance of PodConfigStore.
 func NewPodConfigStore() *PodConfigStore {
 	return &PodConfigStore{
-		configs: make(map[types.UID]map[string]PodConfig),
+		configs: make(map[types.UID]PodConfig),
 	}
 }
 
-// Set stores the configuration for a specific device under a given Pod UID.
+// SetDeviceConfig stores the configuration for a specific device under a given Pod UID.
 // If a configuration for the Pod UID or device name already exists, it will be overwritten.
-func (s *PodConfigStore) Set(podUID types.UID, deviceName string, config PodConfig) {
+func (s *PodConfigStore) SetDeviceConfig(podUID types.UID, deviceName string, config DeviceConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.configs[podUID]; !ok {
-		s.configs[podUID] = make(map[string]PodConfig)
+	podConfig, ok := s.configs[podUID]
+	if !ok {
+		podConfig = PodConfig{
+			DeviceConfigs: make(map[string]DeviceConfig),
+		}
+		s.configs[podUID] = podConfig
 	}
-	s.configs[podUID][deviceName] = config
+	podConfig.DeviceConfigs[deviceName] = config
 }
 
-// Get retrieves the configuration for a specific device under a given Pod UID.
+// GetDeviceConfig retrieves the configuration for a specific device under a given Pod UID.
 // It returns the Config and true if found, otherwise an empty Config and false.
-func (s *PodConfigStore) Get(podUID types.UID, deviceName string) (PodConfig, bool) {
+func (s *PodConfigStore) GetDeviceConfig(podUID types.UID, deviceName string) (DeviceConfig, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if podConfigs, ok := s.configs[podUID]; ok {
-		config, found := podConfigs[deviceName]
+	if podConfig, ok := s.configs[podUID]; ok {
+		config, found := podConfig.DeviceConfigs[deviceName]
 		return config, found
 	}
-	return PodConfig{}, false
+	return DeviceConfig{}, false
 }
 
 // DeletePod removes all configurations associated with a given Pod UID.
@@ -113,22 +124,21 @@ func (s *PodConfigStore) DeletePod(podUID types.UID) {
 	delete(s.configs, podUID)
 }
 
-// GetPodConfigs retrieves all device configurations for a given Pod UID.
-// It is indexed by the Pod's UID, and for each Pod, it maps network device names (as allocated)
-// to their specific Config.
-func (s *PodConfigStore) GetPodConfigs(podUID types.UID) (map[string]PodConfig, bool) {
+// GetPodConfig retrieves all configurations for a given Pod UID.
+// It is indexed by the Pod's UID.
+func (s *PodConfigStore) GetPodConfig(podUID types.UID) (PodConfig, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	podConfigs, found := s.configs[podUID]
+	podConfig, found := s.configs[podUID]
 	if !found {
-		return nil, false
+		return PodConfig{}, false
 	}
 	// Return a copy to prevent external modification of the internal map
-	configsCopy := make(map[string]PodConfig, len(podConfigs))
-	for k, v := range podConfigs {
+	configsCopy := make(map[string]DeviceConfig, len(podConfig.DeviceConfigs))
+	for k, v := range podConfig.DeviceConfigs {
 		configsCopy[k] = v
 	}
-	return configsCopy, true
+	return PodConfig{DeviceConfigs: configsCopy}, true
 }
 
 // DeleteClaim removes all configurations associated with a given claim.
@@ -136,8 +146,8 @@ func (s *PodConfigStore) DeleteClaim(claim types.NamespacedName) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	podsToDelete := []types.UID{}
-	for uid, podConfigsMap := range s.configs {
-		for _, config := range podConfigsMap {
+	for uid, podConfig := range s.configs {
+		for _, config := range podConfig.DeviceConfigs {
 			if config.Claim == claim {
 				podsToDelete = append(podsToDelete, uid)
 				break // Found a match for this pod, no need to check other devices for the same pod

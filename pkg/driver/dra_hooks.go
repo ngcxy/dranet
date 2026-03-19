@@ -216,7 +216,7 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 		netconf := *mergedConf
 
 		klog.V(4).Infof("PrepareResourceClaim %s/%s final Configuration %#v", claim.Namespace, claim.Name, netconf)
-		podCfg := PodConfig{
+		deviceCfg := DeviceConfig{
 			Claim: types.NamespacedName{
 				Namespace: claim.Namespace,
 				Name:      claim.Name,
@@ -245,11 +245,11 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 				errorList = append(errorList, fmt.Errorf("failed to get RDMA device name for IB-only device %s: %v", result.Device, err))
 				continue
 			}
-			podCfg.RDMADevice = buildRDMAConfig(rdmaDevName, charDevices)
+			deviceCfg.RDMADevice = buildRDMAConfig(rdmaDevName, charDevices)
 			for _, uid := range podUIDs {
-				np.podConfigStore.Set(uid, result.Device, podCfg)
+				np.podConfigStore.SetDeviceConfig(uid, result.Device, deviceCfg)
 			}
-			klog.V(4).Infof("IB-only claim resources for pods %v : %#v", podUIDs, podCfg)
+			klog.V(4).Infof("IB-only claim resources for pods %v : %#v", podUIDs, deviceCfg)
 			continue
 		}
 
@@ -264,17 +264,17 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			errorList = append(errorList, fmt.Errorf("failed to get netlink to interface %s: %v", ifName, err))
 			continue
 		}
-		podCfg.NetworkInterfaceConfigInHost.Interface.Name = ifName
+		deviceCfg.NetworkInterfaceConfigInHost.Interface.Name = ifName
 
-		if podCfg.NetworkInterfaceConfigInPod.Interface.Name == "" {
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.Name == "" {
 			// If the interface name was not explicitly overridden, use the same
 			// interface name within the pod's network namespace.
-			podCfg.NetworkInterfaceConfigInPod.Interface.Name = ifName
+			deviceCfg.NetworkInterfaceConfigInPod.Interface.Name = ifName
 		}
 
 		// If DHCP is requested, do a DHCP request to gather the network parameters (IPs and Routes)
 		// ... but we DO NOT apply them in the root namespace
-		if podCfg.NetworkInterfaceConfigInPod.Interface.DHCP != nil && *podCfg.NetworkInterfaceConfigInPod.Interface.DHCP {
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP != nil && *deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP {
 			klog.V(2).Infof("trying to get network configuration via DHCP")
 			contextCancel, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
@@ -282,10 +282,10 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			if err != nil {
 				errorList = append(errorList, fmt.Errorf("fail to get configuration via DHCP for %s: %w", ifName, err))
 			} else {
-				podCfg.NetworkInterfaceConfigInPod.Interface.Addresses = []string{ip}
-				podCfg.NetworkInterfaceConfigInPod.Routes = append(podCfg.NetworkInterfaceConfigInPod.Routes, routes...)
+				deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = []string{ip}
+				deviceCfg.NetworkInterfaceConfigInPod.Routes = append(deviceCfg.NetworkInterfaceConfigInPod.Routes, routes...)
 			}
-		} else if len(podCfg.NetworkInterfaceConfigInPod.Interface.Addresses) == 0 {
+		} else if len(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses) == 0 {
 			// If there is no custom addresses and no DHCP, then use the existing ones
 			// get the existing IP addresses
 			nlAddresses, err := nlHandle.AddrList(link, netlink.FAMILY_ALL)
@@ -299,13 +299,13 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 					if address.Scope != unix.RT_SCOPE_UNIVERSE {
 						continue
 					}
-					podCfg.NetworkInterfaceConfigInPod.Interface.Addresses = append(podCfg.NetworkInterfaceConfigInPod.Interface.Addresses, address.IPNet.String())
+					deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = append(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses, address.IPNet.String())
 				}
 			}
 		}
 
 		// Obtain the existing supported ethtool features and validate the config
-		if podCfg.NetworkInterfaceConfigInPod.Ethtool != nil {
+		if deviceCfg.NetworkInterfaceConfigInPod.Ethtool != nil {
 			client, err := newEthtoolClient(0)
 			if err != nil {
 				errorList = append(errorList, fmt.Errorf("fail to create ethtool client %v", err))
@@ -321,7 +321,7 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 
 			// translate features to the actual kernel names
 			ethtoolFeatures := map[string]bool{}
-			for feature, value := range podCfg.NetworkInterfaceConfigInPod.Ethtool.Features {
+			for feature, value := range deviceCfg.NetworkInterfaceConfigInPod.Ethtool.Features {
 				aliases := ifFeatures.Get(feature)
 				if len(aliases) == 0 {
 					errorList = append(errorList, fmt.Errorf("feature %s not supported by interface", feature))
@@ -331,7 +331,7 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 					ethtoolFeatures[alias] = value
 				}
 			}
-			podCfg.NetworkInterfaceConfigInPod.Ethtool.Features = ethtoolFeatures
+			deviceCfg.NetworkInterfaceConfigInPod.Ethtool.Features = ethtoolFeatures
 		}
 
 		// Obtain the routes and rules associated with the interface.
@@ -340,15 +340,15 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			errorList = append(errorList, err)
 			continue
 		}
-		podCfg.NetworkInterfaceConfigInPod.Routes = append(podCfg.NetworkInterfaceConfigInPod.Routes, routes...)
+		deviceCfg.NetworkInterfaceConfigInPod.Routes = append(deviceCfg.NetworkInterfaceConfigInPod.Routes, routes...)
 
 		// If VRF is enabled, we do not need to copy the rules from the host
 		// because the VRF handles the routing table lookup.
-		if podCfg.NetworkInterfaceConfigInPod.Interface.VRF == nil {
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.VRF == nil {
 			for _, table := range tables.UnsortedList() {
 				if rules, ok := rulesByTable[table]; ok {
 					klog.V(5).Infof("Adding %d rules for table %d associated with interface %s", len(rules), table, ifName)
-					podCfg.NetworkInterfaceConfigInPod.Rules = append(podCfg.NetworkInterfaceConfigInPod.Rules, rules...)
+					deviceCfg.NetworkInterfaceConfigInPod.Rules = append(deviceCfg.NetworkInterfaceConfigInPod.Rules, rules...)
 					// Avoid adding the same rule twice
 					delete(rulesByTable, table)
 				}
@@ -372,20 +372,20 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 				Destination:  neigh.IP.String(),
 				HardwareAddr: neigh.HardwareAddr.String(),
 			}
-			podCfg.NetworkInterfaceConfigInPod.Neighbors = append(podCfg.NetworkInterfaceConfigInPod.Neighbors, neighCfg)
+			deviceCfg.NetworkInterfaceConfigInPod.Neighbors = append(deviceCfg.NetworkInterfaceConfigInPod.Neighbors, neighCfg)
 		}
 
 		// Get RDMA configuration: link and char devices
 		if rdmaDev, err := inventory.GetRdmaDevice(ifName); err == nil && rdmaDev != "" {
 			klog.V(2).Infof("RunPodSandbox processing RDMA device: %s", rdmaDev)
-			podCfg.RDMADevice = buildRDMAConfig(rdmaDev, charDevices)
+			deviceCfg.RDMADevice = buildRDMAConfig(rdmaDev, charDevices)
 		}
 
 		// Remove the pinned programs before the NRI hooks since it
 		// has to walk the entire bpf virtual filesystem and is slow
 		// TODO: check if there is some other way to do this
-		if podCfg.NetworkInterfaceConfigInPod.Interface.DisableEBPFPrograms != nil &&
-			*podCfg.NetworkInterfaceConfigInPod.Interface.DisableEBPFPrograms {
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.DisableEBPFPrograms != nil &&
+			*deviceCfg.NetworkInterfaceConfigInPod.Interface.DisableEBPFPrograms {
 			err := unpinBPFPrograms(ifName)
 			if err != nil {
 				klog.Infof("error unpinning ebpf programs for %s : %v", ifName, err)
@@ -395,9 +395,9 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 		// TODO: support for multiple pods sharing the same device
 		// we'll create the subinterface here
 		for _, uid := range podUIDs {
-			np.podConfigStore.Set(uid, result.Device, podCfg)
+			np.podConfigStore.SetDeviceConfig(uid, result.Device, deviceCfg)
 		}
-		klog.V(4).Infof("Claim Resources for pods %v : %#v", podUIDs, podCfg)
+		klog.V(4).Infof("Claim Resources for pods %v : %#v", podUIDs, deviceCfg)
 	}
 
 	if len(errorList) > 0 {

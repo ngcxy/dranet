@@ -196,7 +196,7 @@ func TestUnprepareResourceClaimsMetrics(t *testing.T) {
 			podConfigStore: NewPodConfigStore(),
 		}
 		claimName := types.NamespacedName{Name: "test-claim", Namespace: "test-ns"}
-		np.podConfigStore.Set("pod-uid-1", "device-a", PodConfig{Claim: claimName})
+		np.podConfigStore.SetDeviceConfig("pod-uid-1", "device-a", DeviceConfig{Claim: claimName})
 
 		claims := []kubeletplugin.NamespacedObject{
 			{NamespacedName: claimName, UID: "claim-uid-1"},
@@ -207,7 +207,7 @@ func TestUnprepareResourceClaimsMetrics(t *testing.T) {
 		}
 
 		// Verify the claim was removed from the store
-		if _, ok := np.podConfigStore.GetPodConfigs("pod-uid-1"); ok {
+		if _, ok := np.podConfigStore.GetPodConfig("pod-uid-1"); ok {
 			t.Errorf("Pod config should have been removed, but was found")
 		}
 

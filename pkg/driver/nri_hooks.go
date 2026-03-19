@@ -66,7 +66,7 @@ func (np *NetworkDriver) CreateContainer(ctx context.Context, pod *api.PodSandbo
 		nriPluginRequestsTotal.WithLabelValues(methodCreateContainer, status).Inc()
 		nriPluginRequestsLatencySeconds.WithLabelValues(methodCreateContainer, status).Observe(time.Since(start).Seconds())
 	}()
-	podConfig, ok := np.podConfigStore.GetPodConfigs(types.UID(pod.GetUid()))
+	podConfig, ok := np.podConfigStore.GetPodConfig(types.UID(pod.GetUid()))
 	if !ok {
 		return nil, nil, nil
 	}
@@ -79,12 +79,12 @@ func (np *NetworkDriver) CreateContainer(ctx context.Context, pod *api.PodSandbo
 	return adjust, update, err
 }
 
-func (np *NetworkDriver) createContainer(_ context.Context, _ *api.PodSandbox, _ *api.Container, podConfig map[string]PodConfig) (*api.ContainerAdjustment, []*api.ContainerUpdate, error) {
+func (np *NetworkDriver) createContainer(_ context.Context, _ *api.PodSandbox, _ *api.Container, podConfig PodConfig) (*api.ContainerAdjustment, []*api.ContainerUpdate, error) {
 	// Containers only care about the RDMA char devices.
 	devPaths := set.Set[string]{}
 	adjust := &api.ContainerAdjustment{}
 
-	for _, config := range podConfig {
+	for _, config := range podConfig.DeviceConfigs {
 		for _, dev := range config.RDMADevice.DevChars {
 			// do not insert the same path multiple times
 			if devPaths.Has(dev.Path) {
@@ -115,7 +115,7 @@ func (np *NetworkDriver) RunPodSandbox(ctx context.Context, pod *api.PodSandbox)
 
 	}()
 	// get the devices associated to this Pod
-	podConfig, ok := np.podConfigStore.GetPodConfigs(types.UID(pod.GetUid()))
+	podConfig, ok := np.podConfigStore.GetPodConfig(types.UID(pod.GetUid()))
 	if !ok {
 		return nil
 	}
@@ -127,7 +127,7 @@ func (np *NetworkDriver) RunPodSandbox(ctx context.Context, pod *api.PodSandbox)
 	}
 	return err
 }
-func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, podConfig map[string]PodConfig) error {
+func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, podConfig PodConfig) error {
 	// get the pod network namespace
 	ns := getNetworkNamespace(pod)
 	// host network pods can not allocate network devices because it impact the host
@@ -140,7 +140,7 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 	// Track all the status updates needed for the resource claims of the pod.
 	statusUpdates := map[types.NamespacedName]*resourceapply.ResourceClaimStatusApplyConfiguration{}
 	// Process the configurations of the ResourceClaim
-	for deviceName, config := range podConfig {
+	for deviceName, config := range podConfig.DeviceConfigs {
 		klog.V(4).Infof("RunPodSandbox processing device: %s with config: %#v", deviceName, config)
 		resourceClaim := types.NamespacedName{Name: config.Claim.Name, Namespace: config.Claim.Namespace}
 		resourceClaimStatus := statusUpdates[resourceClaim]
@@ -231,7 +231,7 @@ func attachRdmaToNS(linkDev, ns string, resourceClaimStatusDevice *resourceapply
 // attachNetdevToNS moves the host network interface into the pod network namespace,
 // applies all associated configuration (ethtool, eBPF, routes, rules, neighbors),
 // and records the resulting status conditions on resourceClaimStatusDevice.
-func attachNetdevToNS(pod *api.PodSandbox, ns, deviceName string, config PodConfig, resourceClaimStatusDevice *resourceapply.AllocatedDeviceStatusApplyConfiguration) error {
+func attachNetdevToNS(pod *api.PodSandbox, ns, deviceName string, config DeviceConfig, resourceClaimStatusDevice *resourceapply.AllocatedDeviceStatusApplyConfiguration) error {
 	ifName := config.NetworkInterfaceConfigInHost.Interface.Name
 	klog.V(2).Infof("RunPodSandbox processing Network device: %s", ifName)
 	// TODO config options to rename the device and pass parameters
@@ -331,7 +331,7 @@ func (np *NetworkDriver) StopPodSandbox(ctx context.Context, pod *api.PodSandbox
 		nriPluginRequestsLatencySeconds.WithLabelValues(methodStopPodSandbox, status).Observe(time.Since(start).Seconds())
 	}()
 	// get the devices associated to this Pod
-	podConfig, ok := np.podConfigStore.GetPodConfigs(types.UID(pod.GetUid()))
+	podConfig, ok := np.podConfigStore.GetPodConfig(types.UID(pod.GetUid()))
 	if !ok {
 		return nil
 	}
@@ -344,7 +344,7 @@ func (np *NetworkDriver) StopPodSandbox(ctx context.Context, pod *api.PodSandbox
 	return err
 }
 
-func (np *NetworkDriver) stopPodSandbox(_ context.Context, pod *api.PodSandbox, podConfig map[string]PodConfig) error {
+func (np *NetworkDriver) stopPodSandbox(_ context.Context, pod *api.PodSandbox, podConfig PodConfig) error {
 	defer func() {
 		np.netdb.RemovePodNetNs(podKey(pod))
 	}()
@@ -360,7 +360,7 @@ func (np *NetworkDriver) stopPodSandbox(_ context.Context, pod *api.PodSandbox, 
 			return nil
 		}
 	}
-	for deviceName, config := range podConfig {
+	for deviceName, config := range podConfig.DeviceConfigs {
 		ifName := config.NetworkInterfaceConfigInPod.Interface.Name
 		if ifName != "" {
 			if err := nsDetachNetdev(ns, ifName, config.NetworkInterfaceConfigInHost.Interface.Name); err != nil {
@@ -385,7 +385,7 @@ func (np *NetworkDriver) RemovePodSandbox(ctx context.Context, pod *api.PodSandb
 		nriPluginRequestsTotal.WithLabelValues(methodRemovePodSandbox, status).Inc()
 		nriPluginRequestsLatencySeconds.WithLabelValues(methodRemovePodSandbox, status).Observe(time.Since(start).Seconds())
 	}()
-	if _, ok := np.podConfigStore.GetPodConfigs(types.UID(pod.GetUid())); !ok {
+	if _, ok := np.podConfigStore.GetPodConfig(types.UID(pod.GetUid())); !ok {
 		return nil
 	}
 	err := np.removePodSandbox(ctx, pod)
