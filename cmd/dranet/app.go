@@ -57,6 +57,7 @@ var (
 	minPollInterval  time.Duration
 	maxPollInterval  time.Duration
 	pollBurst        int
+	moveIBInterfaces bool
 
 	ready atomic.Bool
 )
@@ -69,6 +70,7 @@ func init() {
 	flag.DurationVar(&minPollInterval, "inventory-min-poll-interval", 2*time.Second, "The minimum interval between two consecutive polls of the inventory.")
 	flag.DurationVar(&maxPollInterval, "inventory-max-poll-interval", 1*time.Minute, "The maximum interval between two consecutive polls of the inventory.")
 	flag.IntVar(&pollBurst, "inventory-poll-burst", 5, "The number of polls that can be run in a burst.")
+	flag.BoolVar(&moveIBInterfaces, "move-ib-interfaces", true, "If true, InfiniBand (IPoIB) network interfaces associated with PCI devices are moved into pod network namespace. If false, moving IB network interfaces are skipped and the underlying device is exposed as an IB-only RDMA device.")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, "Usage: dranet [options]\n\n")
@@ -162,6 +164,7 @@ func main() {
 	db := inventory.New(
 		inventory.WithRateLimiter(rate.NewLimiter(rate.Every(minPollInterval), pollBurst)),
 		inventory.WithMaxPollInterval(maxPollInterval),
+		inventory.WithMoveIBInterfaces(moveIBInterfaces),
 	)
 	opts = append(opts, driver.WithInventory(db))
 	dranet, err := driver.Start(ctx, driverName, clientset, nodeName, opts...)

@@ -85,6 +85,13 @@ type DB struct {
 	maxPollInterval time.Duration
 	notifications   chan []resourceapi.Device
 	hasDevices      bool
+
+	// moveIBInterfaces controls whether IPoIB network interfaces are
+	// associated with their PCI devices. When true (default), IPoIB interfaces
+	// are treated like regular network interfaces and moved into pod namespaces.
+	// When false, IPoIB interfaces are skipped and the underlying device is
+	// exposed as an IB-only RDMA device.
+	moveIBInterfaces bool
 }
 
 type Option func(*DB)
@@ -101,6 +108,12 @@ func WithMaxPollInterval(d time.Duration) Option {
 	}
 }
 
+func WithMoveIBInterfaces(move bool) Option {
+	return func(db *DB) {
+		db.moveIBInterfaces = move
+	}
+}
+
 func New(opts ...Option) *DB {
 	db := &DB{
 		podNetNsStore:     map[string]string{},
@@ -109,6 +122,7 @@ func New(opts ...Option) *DB {
 		rateLimiter:       rate.NewLimiter(rate.Every(defaultMinPollInterval), defaultPollBurst),
 		notifications:     make(chan []resourceapi.Device),
 		maxPollInterval:   defaultMaxPollInterval,
+		moveIBInterfaces:  true,
 	}
 	for _, o := range opts {
 		o(db)
@@ -298,12 +312,14 @@ func (db *DB) discoverNetworkInterfaces(pciDevices []resourceapi.Device) []resou
 			continue
 		}
 
-		// Skip IPoIB interfaces. The underlying PCI device will be discovered
-		// as an IB-only RDMA device (no netdev) via discoverRDMADevices.
-		// Associating the IPoIB netdev with the PCI device would mask the
-		// IB-only nature of the device and prevent correct RDMA char device
-		// injection into pods.
-		if link.Type() == "ipoib" {
+		// When moveIBInterfaces is false, skip IPoIB interfaces.
+		// The underlying PCI device will be discovered as an IB-only RDMA
+		// device (no netdev) via discoverRDMADevices. Associating the IPoIB
+		// netdev with the PCI device would mask the IB-only nature of the
+		// device and prevent correct RDMA char device injection into pods.
+		// When moveIBInterfaces is true (default), IPoIB interfaces
+		// are associated with their PCI device so they can be moved into pod namespace.
+		if link.Type() == "ipoib" && !db.moveIBInterfaces {
 			klog.V(4).Infof("Network Interface %s is IPoIB, skipping netdev association (will be discovered as IB-only RDMA device)", ifName)
 			continue
 		}
