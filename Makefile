@@ -40,6 +40,9 @@ e2e-test:
 lint:
 	hack/lint.sh
 
+helm-lint:
+	helm lint --strict deployments/helm/dranet
+
 update:
 	go mod tidy
 
