@@ -13,7 +13,10 @@
 # limitations under the License.
 
 # setup cross-compile env
-FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG GOLANG_IMAGE=golang:1.26
+ARG BASE_IMAGE=gcr.io/distroless/base-debian12
+
+FROM --platform=$BUILDPLATFORM $GOLANG_IMAGE AS builder
 ARG TARGETARCH
 ARG GOARCH=${TARGETARCH} CGO_ENABLED=0
 
@@ -27,6 +30,6 @@ COPY . .
 RUN go build -o /go/bin/dranet ./cmd/dranet
 
 # copy binary onto base image
-FROM gcr.io/distroless/base-debian12
+FROM $BASE_IMAGE
 COPY --from=builder --chown=root:root /go/bin/dranet /dranet
 CMD ["/dranet"]

@@ -57,16 +57,27 @@ TAG?=$(shell echo "$$(date +v%Y%m%d)-$$(git describe --always --dirty)")
 IMAGE?=$(REGISTRY)/$(IMAGE_NAME):$(TAG)
 PLATFORMS?=linux/amd64,linux/arm64
 
+# base images (defaults are in the Dockerfile)
+BUILD_ARGS?=
+ifdef GOLANG_IMAGE
+BUILD_ARGS+=--build-arg GOLANG_IMAGE=$(GOLANG_IMAGE)
+endif
+ifdef BASE_IMAGE
+BUILD_ARGS+=--build-arg BASE_IMAGE=$(BASE_IMAGE)
+endif
+
 # required to enable buildx
 export DOCKER_CLI_EXPERIMENTAL=enabled
 image-build: ensure-buildx
 	docker buildx build . \
+		$(BUILD_ARGS) \
 		--tag="${IMAGE}" \
 		--load
 
 image-push: ensure-buildx
 	docker buildx build . \
 		--platform=$(PLATFORMS) \
+		$(BUILD_ARGS) \
 		--tag="${IMAGE}" \
 		--push
 
