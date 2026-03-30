@@ -29,22 +29,29 @@ import (
 	"sigs.k8s.io/dranet/pkg/cloudprovider"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/azure"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/gce"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/oke"
 )
 
 // getInstanceProperties get the instace properties and stores them in a global variable to be used in discovery
 func getInstanceProperties(ctx context.Context) cloudprovider.CloudInstance {
 	var err error
 	var instance cloudprovider.CloudInstance
-	if metadata.OnGCE() {
+	switch {
+	case metadata.OnGCE():
 		// Get google compute instance metadata for network interfaces
 		// https://cloud.google.com/compute/docs/metadata/predefined-metadata-keys
 		klog.Infof("running on GCE")
 		instance, err = gce.GetInstance(ctx)
-	} else if azure.OnAzure(ctx) {
+	case azure.OnAzure(ctx):
 		// Get Azure instance metadata for placement group and VM size
 		// https://learn.microsoft.com/en-us/azure/virtual-machines/instance-metadata-service
 		klog.Infof("running on Azure")
 		instance, err = azure.GetInstance(ctx)
+	case oke.OnOKE(ctx):
+		// Get OCI instance metadata for shape, fault domain, and availability domain
+		// https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/gettingmetadata.htm
+		klog.Infof("running on OKE")
+		instance, err = oke.GetInstance(ctx)
 	}
 	if err != nil {
 		klog.Infof("could not get instance properties: %v", err)
