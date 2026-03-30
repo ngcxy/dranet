@@ -32,27 +32,58 @@ import (
 	"sigs.k8s.io/dranet/pkg/cloudprovider/oke"
 )
 
-// getInstanceProperties get the instace properties and stores them in a global variable to be used in discovery
-func getInstanceProperties(ctx context.Context) cloudprovider.CloudInstance {
-	var err error
-	var instance cloudprovider.CloudInstance
-	switch {
-	case metadata.OnGCE():
-		// Get google compute instance metadata for network interfaces
-		// https://cloud.google.com/compute/docs/metadata/predefined-metadata-keys
-		klog.Infof("running on GCE")
-		instance, err = gce.GetInstance(ctx)
-	case azure.OnAzure(ctx):
-		// Get Azure instance metadata for placement group and VM size
-		// https://learn.microsoft.com/en-us/azure/virtual-machines/instance-metadata-service
-		klog.Infof("running on Azure")
-		instance, err = azure.GetInstance(ctx)
-	case oke.OnOKE(ctx):
-		// Get OCI instance metadata for shape, fault domain, and availability domain
-		// https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/gettingmetadata.htm
-		klog.Infof("running on OKE")
-		instance, err = oke.GetInstance(ctx)
+type CloudProviderHint string
+
+const (
+	CloudProviderHintGCE   CloudProviderHint = "GCE"
+	CloudProviderHintAzure CloudProviderHint = "AZURE"
+	CloudProviderHintOKE   CloudProviderHint = "OKE"
+	CloudProviderHintNone  CloudProviderHint = "NONE"
+)
+
+func discoverCloudProvider(ctx context.Context) CloudProviderHint {
+	discoverers := map[CloudProviderHint]func(context.Context) bool{
+		CloudProviderHintGCE: func(ctx context.Context) bool {
+			return metadata.OnGCE()
+		},
+		CloudProviderHintAzure: azure.OnAzure,
+		CloudProviderHintOKE:   oke.OnOKE,
 	}
+
+	for hint, discoverer := range discoverers {
+		if discoverer(ctx) {
+			return hint
+		}
+	}
+
+	klog.Warning("could not discover cloud provider")
+	return CloudProviderHintNone
+}
+
+// getInstanceProperties gets the instance properties using the cloud provider hint if provided.
+func getInstanceProperties(ctx context.Context, cloudProviderHint CloudProviderHint) cloudprovider.CloudInstance {
+	if cloudProviderHint == CloudProviderHintNone {
+		klog.Infof("cloud provider hint is none, skipping instance properties retrieval")
+		return nil
+	}
+
+	providers := map[CloudProviderHint]func(context.Context) (cloudprovider.CloudInstance, error){
+		CloudProviderHintGCE:   gce.GetInstance,
+		CloudProviderHintAzure: azure.GetInstance,
+		CloudProviderHintOKE:   oke.GetInstance,
+	}
+
+	provider, ok := providers[cloudProviderHint]
+	if !ok {
+		klog.Infof("unknown cloud provider hint: %s", cloudProviderHint)
+		return nil
+	}
+	instance, err := provider(ctx)
+	if err != nil {
+		klog.Infof("could not get instance properties: %v", err)
+		return nil
+	}
+
 	if err != nil {
 		klog.Infof("could not get instance properties: %v", err)
 		return nil
