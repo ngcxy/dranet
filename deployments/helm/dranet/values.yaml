@@ -15,6 +15,17 @@ podAnnotations: {}
 podLabels: {}
 
 logVerbosity: 4
+metricsPort: ~
+metricsPath: /healthz
+
+# dranet daemon arguments — omit any field to use the binary's built-in default
+args: {}
+#  filter: '!("dra.net/type" in attributes) || attributes["dra.net/type"].StringValue  != "veth"'
+#  inventoryMinPollInterval: "2s"
+#  inventoryMaxPollInterval: "1m"
+#  inventoryPollBurst: 5
+#  moveIBInterfaces: true
+#  cloudProviderHint: ""
 
 tolerations:
   - operator: Exists
@@ -25,11 +36,6 @@ resources:
     cpu: 100m
     memory: 50Mi
   limits: {}
-
-readinessProbe:
-  httpGet:
-    path: /healthz
-    port: 9177
 
 serviceAccount:
   annotations: {}
