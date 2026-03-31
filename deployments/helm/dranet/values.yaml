@@ -1,0 +1,35 @@
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: registry.k8s.io/networking/dranet
+  tag: stable
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+rbac:
+  create: true
+
+podAnnotations: {}
+podLabels: {}
+
+logVerbosity: 4
+
+tolerations:
+  - operator: Exists
+    effect: NoSchedule
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 50Mi
+  limits: {}
+
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: 9177
+
+serviceAccount:
+  annotations: {}

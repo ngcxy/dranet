@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "dranet.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dranet.labels" . | nindent 4 }}
+    tier: node
+    app: {{ include "dranet.name" . }}
+    k8s-app: {{ include "dranet.name" . }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "dranet.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dranet.labels" . | nindent 8 }}
+        {{- include "dranet.selectorLabels" . | nindent 8 }}
+        tier: node
+        k8s-app: {{ include "dranet.name" . }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      hostNetwork: true
+      serviceAccountName: {{ include "dranet.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      containers:
+        - name: dranet
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - /dranet
+            - --v={{ .Values.logVerbosity }}
+            - --hostname-override=$(NODE_NAME)
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              {{- toYaml .Values.resources.requests | nindent 14 }}
+            {{- with .Values.resources.limits }}
+            limits:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+          securityContext:
+            privileged: true
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/plugins
+            - name: plugin-registry
+              mountPath: /var/lib/kubelet/plugins_registry
+            - name: nri-plugin
+              mountPath: /var/run/nri
+            - name: netns
+              mountPath: /var/run/netns
+              mountPropagation: HostToContainer
+            - name: infiniband
+              mountPath: /dev/infiniband
+              mountPropagation: HostToContainer
+            - name: bpf-programs
+              mountPath: /sys/fs/bpf
+              mountPropagation: HostToContainer
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/plugins
+        - name: plugin-registry
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+        - name: nri-plugin
+          hostPath:
+            path: /var/run/nri
+        - name: netns
+          hostPath:
+            path: /var/run/netns
+        - name: infiniband
+          hostPath:
+            path: /dev/infiniband
+        - name: bpf-programs
+          hostPath:
+            path: /sys/fs/bpf
