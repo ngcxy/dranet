@@ -92,6 +92,11 @@ type DB struct {
 	// When false, IPoIB interfaces are skipped and the underlying device is
 	// exposed as an IB-only RDMA device.
 	moveIBInterfaces bool
+
+	// cloudProviderHint is a hint for the cloud provider that will be used to
+	// select the appropriate provider plugin. Supported values: (GCE, AZURE, OKE, NONE).
+	// If not set, the cloud provider will be auto-detected, but may take longer to start.
+	cloudProviderHint CloudProviderHint
 }
 
 type Option func(*DB)
@@ -111,6 +116,19 @@ func WithMaxPollInterval(d time.Duration) Option {
 func WithMoveIBInterfaces(move bool) Option {
 	return func(db *DB) {
 		db.moveIBInterfaces = move
+	}
+}
+
+func WithCloudProviderHint(hint string) Option {
+	return func(db *DB) {
+		if hint != "" {
+			// validate hint
+			h := CloudProviderHint(hint)
+			if h != CloudProviderHintGCE && h != CloudProviderHintAzure && h != CloudProviderHintOKE && h != CloudProviderHintNone {
+				klog.Fatalf("unknown cloud provider hint %q", hint)
+			}
+			db.cloudProviderHint = h
+		}
 	}
 }
 
@@ -168,7 +186,10 @@ func (db *DB) Run(ctx context.Context) error {
 	}
 
 	// Obtain data that will not change after the startup
-	db.instance = getInstanceProperties(ctx)
+	if db.cloudProviderHint == "" {
+		db.cloudProviderHint = discoverCloudProvider(ctx)
+	}
+	db.instance = getInstanceProperties(ctx, db.cloudProviderHint)
 	db.gwInterfaces = getDefaultGwInterfaces()
 	klog.V(2).Infof("Default gateway interfaces: %v", db.gwInterfaces.UnsortedList())
 

@@ -50,14 +50,15 @@ const (
 )
 
 var (
-	hostnameOverride string
-	kubeconfig       string
-	bindAddress      string
-	celExpression    string
-	minPollInterval  time.Duration
-	maxPollInterval  time.Duration
-	pollBurst        int
-	moveIBInterfaces bool
+	hostnameOverride  string
+	kubeconfig        string
+	bindAddress       string
+	celExpression     string
+	minPollInterval   time.Duration
+	maxPollInterval   time.Duration
+	pollBurst         int
+	moveIBInterfaces  bool
+	cloudProviderHint string
 
 	ready atomic.Bool
 )
@@ -71,6 +72,7 @@ func init() {
 	flag.DurationVar(&maxPollInterval, "inventory-max-poll-interval", 1*time.Minute, "The maximum interval between two consecutive polls of the inventory.")
 	flag.IntVar(&pollBurst, "inventory-poll-burst", 5, "The number of polls that can be run in a burst.")
 	flag.BoolVar(&moveIBInterfaces, "move-ib-interfaces", true, "If true, InfiniBand (IPoIB) network interfaces associated with PCI devices are moved into pod network namespace. If false, moving IB network interfaces are skipped and the underlying device is exposed as an IB-only RDMA device.")
+	flag.StringVar(&cloudProviderHint, "cloud-provider-hint", "", "Hint for the cloud provider that will be used to select the appropriate provider plugin. Supported values: (GCE, AZURE, OKE, NONE). If left unset, the cloud provider is auto-detected (which may delay startup) and defaults to 'NONE' if detection fails.")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, "Usage: dranet [options]\n\n")
@@ -165,6 +167,7 @@ func main() {
 		inventory.WithRateLimiter(rate.NewLimiter(rate.Every(minPollInterval), pollBurst)),
 		inventory.WithMaxPollInterval(maxPollInterval),
 		inventory.WithMoveIBInterfaces(moveIBInterfaces),
+		inventory.WithCloudProviderHint(cloudProviderHint),
 	)
 	opts = append(opts, driver.WithInventory(db))
 	dranet, err := driver.Start(ctx, driverName, clientset, nodeName, opts...)
