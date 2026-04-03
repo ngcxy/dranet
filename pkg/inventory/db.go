@@ -124,7 +124,7 @@ func WithCloudProviderHint(hint string) Option {
 		if hint != "" {
 			// validate hint
 			h := CloudProviderHint(hint)
-			if h != CloudProviderHintGCE && h != CloudProviderHintAzure && h != CloudProviderHintOKE && h != CloudProviderHintNone {
+			if h != CloudProviderHintGCE && h != CloudProviderHintAWS && h != CloudProviderHintAzure && h != CloudProviderHintOKE && h != CloudProviderHintNone {
 				klog.Fatalf("unknown cloud provider hint %q", hint)
 			}
 			db.cloudProviderHint = h
