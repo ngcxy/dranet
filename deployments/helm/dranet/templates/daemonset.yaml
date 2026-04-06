@@ -43,6 +43,27 @@ spec:
             - /dranet
             - --v={{ .Values.logVerbosity }}
             - --hostname-override=$(NODE_NAME)
+            {{- if .Values.metricsPort }}
+            - --bind-address=:{{ .Values.metricsPort }}
+            {{- end }}
+            {{- if .Values.args.filter }}
+            - {{ print "--filter=" .Values.args.filter | quote }}
+            {{- end }}
+            {{- if .Values.args.inventoryMinPollInterval }}
+            - --inventory-min-poll-interval={{ .Values.args.inventoryMinPollInterval }}
+            {{- end }}
+            {{- if .Values.args.inventoryMaxPollInterval }}
+            - --inventory-max-poll-interval={{ .Values.args.inventoryMaxPollInterval }}
+            {{- end }}
+            {{- if .Values.args.inventoryPollBurst }}
+            - --inventory-poll-burst={{ .Values.args.inventoryPollBurst }}
+            {{- end }}
+            {{- if (hasKey .Values.args "moveIBInterfaces") }}
+            - --move-ib-interfaces={{ .Values.args.moveIBInterfaces }}
+            {{- end }}
+            {{- if .Values.args.cloudProviderHint }}
+            - --cloud-provider-hint={{ .Values.args.cloudProviderHint }}
+            {{- end }}
           env:
             - name: NODE_NAME
               valueFrom:
@@ -58,7 +79,9 @@ spec:
           securityContext:
             privileged: true
           readinessProbe:
-            {{- toYaml .Values.readinessProbe | nindent 12 }}
+            httpGet:
+              path: {{ .Values.metricsPath }}
+              port: {{ .Values.metricsPort | default 9177 }}
           volumeMounts:
             - name: device-plugin
               mountPath: /var/lib/kubelet/plugins
