@@ -23,26 +23,35 @@ import (
 	"reflect"
 	"sync"
 	"testing"
-	"time"
 
 	bolt "go.etcd.io/bbolt"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/dranet/pkg/apis"
 )
 
-func newTestBoltStore(t *testing.T) *BoltPodConfigStore {
+func newTestBoltCheckpointer(t *testing.T) *boltCheckpointer {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	store, err := NewBoltPodConfigStore(dbPath)
+	cp, err := newBoltCheckpointer(dbPath)
 	if err != nil {
-		t.Fatalf("NewBoltPodConfigStore() error: %v", err)
+		t.Fatalf("newBoltCheckpointer() error: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
-	return store
+	t.Cleanup(func() { cp.Close() })
+	return cp
 }
 
-func TestBoltPodConfigStore_SetAndGet(t *testing.T) {
-	store := newTestBoltStore(t)
+func newTestStoreWithBolt(t *testing.T) (*PodConfigStore, *boltCheckpointer) {
+	t.Helper()
+	cp := newTestBoltCheckpointer(t)
+	store, err := NewPodConfigStore(cp)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() error: %v", err)
+	}
+	return store, cp
+}
+
+func TestBoltCheckpointer_StoreAndGetOrCreate(t *testing.T) {
+	cp := newTestBoltCheckpointer(t)
 	podUID := types.UID("test-pod-uid-1")
 	deviceName := "eth0"
 	config := DeviceConfig{
@@ -59,174 +68,88 @@ func TestBoltPodConfigStore_SetAndGet(t *testing.T) {
 		RDMADevice: RDMAConfig{LinkDev: "mlx5_0"},
 	}
 
-	// Test Get on non-existent item.
-	_, found := store.GetDeviceConfig(podUID, deviceName)
-	if found {
-		t.Errorf("GetDeviceConfig() found a config before Set(), expected not found")
+	// Empty checkpoint.
+	data, err := cp.GetOrCreate()
+	if err != nil {
+		t.Fatalf("GetOrCreate() error: %v", err)
+	}
+	if len(data) != 0 {
+		t.Errorf("expected empty checkpoint, got %d entries", len(data))
 	}
 
-	store.SetDeviceConfig(podUID, deviceName, config)
-
-	retrievedConfig, found := store.GetDeviceConfig(podUID, deviceName)
-	if !found {
-		t.Fatalf("GetDeviceConfig() did not find config after Set()")
+	// Store and read back.
+	if err := cp.Store(podUID, deviceName, config); err != nil {
+		t.Fatalf("Store() error: %v", err)
 	}
-	if !reflect.DeepEqual(retrievedConfig, config) {
-		t.Errorf("GetDeviceConfig() = %+v, want %+v", retrievedConfig, config)
+	data, err = cp.GetOrCreate()
+	if err != nil {
+		t.Fatalf("GetOrCreate() error: %v", err)
 	}
-
-	// Test Get with different deviceName.
-	_, found = store.GetDeviceConfig(podUID, "eth1")
-	if found {
-		t.Errorf("GetDeviceConfig() found config for wrong deviceName")
+	if len(data) != 1 {
+		t.Fatalf("expected 1 pod, got %d", len(data))
 	}
-
-	// Test Get with different podUID.
-	_, found = store.GetDeviceConfig(types.UID("other-pod-uid"), deviceName)
-	if found {
-		t.Errorf("GetDeviceConfig() found config for wrong podUID")
-	}
-
-	// Test overwriting.
-	newConfig := DeviceConfig{
-		NetworkInterfaceConfigInPod: apis.NetworkConfig{
-			Interface: apis.InterfaceConfig{Name: "eth0-new"},
-			Ethtool:   &apis.EthtoolConfig{PrivateFlags: map[string]bool{"custom-flag": false}},
-		},
-	}
-	store.SetDeviceConfig(podUID, deviceName, newConfig)
-	retrievedConfig, found = store.GetDeviceConfig(podUID, deviceName)
-	if !found {
-		t.Fatalf("GetDeviceConfig() did not find config after overwrite")
-	}
-	if !reflect.DeepEqual(retrievedConfig, newConfig) {
-		t.Errorf("GetDeviceConfig() after overwrite = %+v, want %+v", retrievedConfig, newConfig)
+	if !reflect.DeepEqual(data[podUID][deviceName], config) {
+		t.Errorf("got %+v, want %+v", data[podUID][deviceName], config)
 	}
 }
 
-func TestBoltPodConfigStore_GetPodConfig(t *testing.T) {
-	store := newTestBoltStore(t)
-	podUID := types.UID("test-pod-uid-1")
-	config1 := DeviceConfig{NetworkInterfaceConfigInPod: apis.NetworkConfig{Interface: apis.InterfaceConfig{Name: "eth0"}}}
-	config2 := DeviceConfig{NetworkInterfaceConfigInPod: apis.NetworkConfig{Interface: apis.InterfaceConfig{Name: "eth1"}}}
+func TestBoltCheckpointer_DeletePod(t *testing.T) {
+	cp := newTestBoltCheckpointer(t)
+	cp.Store("pod-1", "eth0", DeviceConfig{})
+	cp.Store("pod-2", "eth0", DeviceConfig{})
 
-	store.SetDeviceConfig(podUID, "eth0", config1)
-	store.SetDeviceConfig(podUID, "eth1", config2)
-
-	podConfig, found := store.GetPodConfig(podUID)
-	if !found {
-		t.Fatalf("GetPodConfig() did not find configs for podUID")
+	if err := cp.DeletePod("pod-1"); err != nil {
+		t.Fatalf("DeletePod() error: %v", err)
 	}
-	if len(podConfig.DeviceConfigs) != 2 {
-		t.Errorf("GetPodConfig() returned %d configs, want 2", len(podConfig.DeviceConfigs))
+	data, _ := cp.GetOrCreate()
+	if _, ok := data["pod-1"]; ok {
+		t.Error("pod-1 should have been deleted")
 	}
-	if !reflect.DeepEqual(podConfig.DeviceConfigs["eth0"], config1) {
-		t.Errorf("GetPodConfig()[eth0] = %+v, want %+v", podConfig.DeviceConfigs["eth0"], config1)
-	}
-	if !reflect.DeepEqual(podConfig.DeviceConfigs["eth1"], config2) {
-		t.Errorf("GetPodConfig()[eth1] = %+v, want %+v", podConfig.DeviceConfigs["eth1"], config2)
+	if _, ok := data["pod-2"]; !ok {
+		t.Error("pod-2 should still exist")
 	}
 
-	// Non-existent pod.
-	_, found = store.GetPodConfig(types.UID("non-existent"))
-	if found {
-		t.Errorf("GetPodConfig() found config for non-existent pod")
+	// Delete non-existent pod — should not error.
+	if err := cp.DeletePod("non-existent"); err != nil {
+		t.Errorf("DeletePod(non-existent) error: %v", err)
 	}
 }
 
-func TestBoltPodConfigStore_DeletePod(t *testing.T) {
-	store := newTestBoltStore(t)
-	podUID1 := types.UID("pod-1")
-	podUID2 := types.UID("pod-2")
-
-	store.SetDeviceConfig(podUID1, "eth0", DeviceConfig{NetworkInterfaceConfigInPod: apis.NetworkConfig{Interface: apis.InterfaceConfig{Name: "p1eth0"}}})
-	store.SetDeviceConfig(podUID1, "eth1", DeviceConfig{NetworkInterfaceConfigInPod: apis.NetworkConfig{Interface: apis.InterfaceConfig{Name: "p1eth1"}}})
-	store.SetDeviceConfig(podUID2, "eth0", DeviceConfig{NetworkInterfaceConfigInPod: apis.NetworkConfig{Interface: apis.InterfaceConfig{Name: "p2eth0"}}})
-
-	store.DeletePod(podUID1)
-
-	_, found := store.GetPodConfig(podUID1)
-	if found {
-		t.Errorf("GetPodConfig() found config for deleted pod")
+func TestBoltCheckpointer_DeviceConfigsBucketStructure(t *testing.T) {
+	cp := newTestBoltCheckpointer(t)
+	config := DeviceConfig{
+		Claim: types.NamespacedName{Namespace: "ns", Name: "claim1"},
 	}
+	cp.Store("pod-1", "eth0", config)
 
-	podConfig, found := store.GetPodConfig(podUID2)
-	if !found {
-		t.Fatalf("GetPodConfig() did not find config for other pod")
-	}
-	if len(podConfig.DeviceConfigs) != 1 {
-		t.Errorf("Expected 1 device config for pod2, got %d", len(podConfig.DeviceConfigs))
-	}
-
-	// Delete non-existent pod - should not panic.
-	store.DeletePod(types.UID("non-existent"))
-}
-
-func TestBoltPodConfigStore_DeleteClaim(t *testing.T) {
-	store := newTestBoltStore(t)
-	claim1 := types.NamespacedName{Namespace: "ns1", Name: "claim1"}
-	claim2 := types.NamespacedName{Namespace: "ns1", Name: "claim2"}
-
-	store.SetDeviceConfig("pod-1", "eth0", DeviceConfig{Claim: claim1})
-	store.SetDeviceConfig("pod-1", "eth1", DeviceConfig{Claim: claim1})
-	store.SetDeviceConfig("pod-2", "eth0", DeviceConfig{Claim: claim1})
-	store.SetDeviceConfig("pod-3", "eth0", DeviceConfig{Claim: claim2})
-
-	deletedPods := store.DeleteClaim(claim1)
-
-	if len(deletedPods) != 2 {
-		t.Errorf("DeleteClaim() returned %d pods, want 2", len(deletedPods))
-	}
-
-	_, found := store.GetPodConfig("pod-1")
-	if found {
-		t.Errorf("Pod-1 should have been deleted")
-	}
-	_, found = store.GetPodConfig("pod-2")
-	if found {
-		t.Errorf("Pod-2 should have been deleted")
-	}
-
-	podConfig, found := store.GetPodConfig("pod-3")
-	if !found {
-		t.Fatalf("Pod-3 should not have been deleted")
-	}
-	if len(podConfig.DeviceConfigs) != 1 {
-		t.Errorf("Pod-3 should have 1 device config, got %d", len(podConfig.DeviceConfigs))
-	}
-
-	// Delete non-existent claim.
-	deletedPods = store.DeleteClaim(types.NamespacedName{Namespace: "ns", Name: "not-exist"})
-	if len(deletedPods) != 0 {
-		t.Errorf("DeleteClaim() for non-existent claim returned %d pods, want 0", len(deletedPods))
+	// Verify the bucket structure: pod_configs -> pod-1 -> device_configs -> eth0
+	err := cp.db.View(func(tx *bolt.Tx) error {
+		root := tx.Bucket(podConfigsBucket)
+		if root == nil {
+			return fmt.Errorf("missing root bucket")
+		}
+		podBucket := root.Bucket([]byte("pod-1"))
+		if podBucket == nil {
+			return fmt.Errorf("missing pod bucket")
+		}
+		devBucket := podBucket.Bucket(deviceConfigsKey)
+		if devBucket == nil {
+			return fmt.Errorf("missing device_configs sub-bucket")
+		}
+		data := devBucket.Get([]byte("eth0"))
+		if data == nil {
+			return fmt.Errorf("missing eth0 entry in device_configs")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestBoltPodConfigStore_NRIActivity(t *testing.T) {
-	store := newTestBoltStore(t)
-	podUID := types.UID("pod-1")
-	store.SetDeviceConfig(podUID, "eth0", DeviceConfig{})
-
-	now := time.Now()
-	store.UpdateLastNRIActivity(podUID, now)
-
-	activities := store.GetPodNRIActivities()
-	if len(activities) != 1 {
-		t.Fatalf("Expected 1 activity, got %d", len(activities))
-	}
-	if !activities[podUID].Equal(now) {
-		t.Errorf("Activity timestamp = %v, want %v", activities[podUID], now)
-	}
-
-	// UpdateLastNRIActivity for non-existent pod should do nothing.
-	store.UpdateLastNRIActivity(types.UID("no-such-pod"), now)
-	activities = store.GetPodNRIActivities()
-	if len(activities) != 1 {
-		t.Errorf("Expected 1 activity after update on non-existent pod, got %d", len(activities))
-	}
-}
-
-func TestBoltPodConfigStore_Persistence(t *testing.T) {
+// TestPodConfigStore_Persistence verifies the full layered flow:
+// write through PodConfigStore → bolt, close, reopen, verify state restored.
+func TestPodConfigStore_Persistence(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "persist.db")
 
 	config := DeviceConfig{
@@ -243,18 +166,26 @@ func TestBoltPodConfigStore_Persistence(t *testing.T) {
 		},
 	}
 
-	// Write data and close.
-	store1, err := NewBoltPodConfigStore(dbPath)
+	// Write data via PodConfigStore and close.
+	cp1, err := newBoltCheckpointer(dbPath)
 	if err != nil {
-		t.Fatalf("NewBoltPodConfigStore() error: %v", err)
+		t.Fatalf("newBoltCheckpointer() error: %v", err)
+	}
+	store1, err := NewPodConfigStore(cp1)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() error: %v", err)
 	}
 	store1.SetDeviceConfig("pod-1", "eth0", config)
 	store1.Close()
 
-	// Reopen and verify data persisted.
-	store2, err := NewBoltPodConfigStore(dbPath)
+	// Reopen and verify data was restored from checkpoint.
+	cp2, err := newBoltCheckpointer(dbPath)
 	if err != nil {
-		t.Fatalf("NewBoltPodConfigStore() reopen error: %v", err)
+		t.Fatalf("newBoltCheckpointer() reopen error: %v", err)
+	}
+	store2, err := NewPodConfigStore(cp2)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() reopen error: %v", err)
 	}
 	defer store2.Close()
 
@@ -275,8 +206,39 @@ func TestBoltPodConfigStore_Persistence(t *testing.T) {
 	}
 }
 
-func TestBoltPodConfigStore_ThreadSafety(t *testing.T) {
-	store := newTestBoltStore(t)
+// TestPodConfigStore_DeletePodCheckpoints verifies that DeletePod and
+// DeleteClaim propagate to the checkpointer.
+func TestPodConfigStore_DeletePodCheckpoints(t *testing.T) {
+	store, cp := newTestStoreWithBolt(t)
+
+	store.SetDeviceConfig("pod-1", "eth0", DeviceConfig{Claim: types.NamespacedName{Namespace: "ns", Name: "c1"}})
+	store.SetDeviceConfig("pod-2", "eth0", DeviceConfig{Claim: types.NamespacedName{Namespace: "ns", Name: "c1"}})
+	store.SetDeviceConfig("pod-3", "eth0", DeviceConfig{Claim: types.NamespacedName{Namespace: "ns", Name: "c2"}})
+
+	store.DeletePod("pod-1")
+
+	// Verify deleted from bolt.
+	data, _ := cp.GetOrCreate()
+	if _, ok := data["pod-1"]; ok {
+		t.Error("pod-1 should have been deleted from checkpoint")
+	}
+	if _, ok := data["pod-2"]; !ok {
+		t.Error("pod-2 should still be in checkpoint")
+	}
+
+	// DeleteClaim should propagate.
+	store.DeleteClaim(types.NamespacedName{Namespace: "ns", Name: "c1"})
+	data, _ = cp.GetOrCreate()
+	if _, ok := data["pod-2"]; ok {
+		t.Error("pod-2 should have been deleted from checkpoint via DeleteClaim")
+	}
+	if _, ok := data["pod-3"]; !ok {
+		t.Error("pod-3 should still be in checkpoint")
+	}
+}
+
+func TestPodConfigStore_ThreadSafetyWithBolt(t *testing.T) {
+	store, _ := newTestStoreWithBolt(t)
 	numGoroutines := 50
 	var wg sync.WaitGroup
 
@@ -308,46 +270,15 @@ func TestBoltPodConfigStore_ThreadSafety(t *testing.T) {
 	wg.Wait()
 }
 
-func TestBoltPodConfigStore_ListPods(t *testing.T) {
-	store := newTestBoltStore(t)
-
-	// Empty store.
-	if uids := store.ListPods(); len(uids) != 0 {
-		t.Errorf("expected 0 pods, got %d", len(uids))
-	}
-
-	store.SetDeviceConfig("pod-a", "eth0", DeviceConfig{}) //nolint:errcheck
-	store.SetDeviceConfig("pod-b", "eth0", DeviceConfig{}) //nolint:errcheck
-	store.SetDeviceConfig("pod-b", "eth1", DeviceConfig{}) //nolint:errcheck
-
-	uids := store.ListPods()
-	if len(uids) != 2 {
-		t.Fatalf("expected 2 pods, got %d", len(uids))
-	}
-	uidSet := map[types.UID]bool{}
-	for _, uid := range uids {
-		uidSet[uid] = true
-	}
-	if !uidSet["pod-a"] || !uidSet["pod-b"] {
-		t.Errorf("expected pod-a and pod-b, got %v", uids)
-	}
-
-	store.DeletePod("pod-a")
-	uids = store.ListPods()
-	if len(uids) != 1 || uids[0] != "pod-b" {
-		t.Errorf("after delete, expected [pod-b], got %v", uids)
-	}
-}
-
-func TestBoltPodConfigStore_Errors(t *testing.T) {
+func TestBoltCheckpointer_Errors(t *testing.T) {
 	t.Run("creates missing parent directory", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "nested", "path", "test.db")
 
-		store, err := NewBoltPodConfigStore(dbPath)
+		cp, err := newBoltCheckpointer(dbPath)
 		if err != nil {
-			t.Fatalf("NewBoltPodConfigStore() error: %v", err)
+			t.Fatalf("newBoltCheckpointer() error: %v", err)
 		}
-		defer store.Close()
+		defer cp.Close()
 
 		if _, err := os.Stat(filepath.Dir(dbPath)); err != nil {
 			t.Fatalf("expected parent directory to exist: %v", err)
@@ -356,90 +287,101 @@ func TestBoltPodConfigStore_Errors(t *testing.T) {
 
 	t.Run("invalid db path", func(t *testing.T) {
 		tempDir := t.TempDir()
-		// Pass a directory path to force an error on bolt.Open.
 		invalidDbPath := filepath.Join(tempDir, "is_a_dir")
 		if err := os.Mkdir(invalidDbPath, 0755); err != nil {
 			t.Fatalf("failed to mkdir: %v", err)
 		}
-		_, err := NewBoltPodConfigStore(invalidDbPath)
+		_, err := newBoltCheckpointer(invalidDbPath)
 		if err == nil {
 			t.Fatal("expected error when opening a directory as bolt db")
 		}
 	})
 
-	t.Run("corrupted JSON data", func(t *testing.T) {
-		store := newTestBoltStore(t)
-
-		podUID := types.UID("pod-corrupt")
-		deviceName := "net1"
-		claim := types.NamespacedName{Namespace: "default", Name: "claim1"}
+	t.Run("corrupted JSON data fails GetOrCreate", func(t *testing.T) {
+		cp := newTestBoltCheckpointer(t)
 
 		// Inject invalid JSON directly into the bolt bucket.
-		err := store.db.Update(func(tx *bolt.Tx) error {
+		err := cp.db.Update(func(tx *bolt.Tx) error {
 			root := tx.Bucket(podConfigsBucket)
-			podBucket, err := root.CreateBucketIfNotExists([]byte(podUID))
+			podBucket, err := root.CreateBucketIfNotExists([]byte("pod-corrupt"))
 			if err != nil {
 				return err
 			}
-			return podBucket.Put([]byte(deviceName), []byte("{invalid-json"))
+			devBucket, err := podBucket.CreateBucketIfNotExists(deviceConfigsKey)
+			if err != nil {
+				return err
+			}
+			return devBucket.Put([]byte("net1"), []byte("{invalid-json"))
 		})
 		if err != nil {
 			t.Fatalf("failed to insert invalid json: %v", err)
 		}
 
-		// GetDeviceConfig should return false on unmarshal error.
-		if _, found := store.GetDeviceConfig(podUID, deviceName); found {
-			t.Error("expected not found due to json unmarshal error")
-		}
-
-		// GetPodConfig should skip the corrupted entry.
-		podConfig, found := store.GetPodConfig(podUID)
-		if found {
-			t.Error("expected no valid devices in pod config")
-		}
-		if len(podConfig.DeviceConfigs) != 0 {
-			t.Error("expected empty device configs map")
-		}
-
-		// DeleteClaim should skip corrupted entries gracefully.
-		if uids := store.DeleteClaim(claim); len(uids) != 0 {
-			t.Errorf("expected no pods deleted, got %d", len(uids))
+		_, err = cp.GetOrCreate()
+		if err == nil {
+			t.Fatal("GetOrCreate() should fail on corrupted data")
 		}
 	})
 
 	t.Run("missing root bucket", func(t *testing.T) {
-		store := newTestBoltStore(t)
+		cp := newTestBoltCheckpointer(t)
 
-		podUID := types.UID("pod-missing-root")
-		deviceName := "net1"
-		claim := types.NamespacedName{Namespace: "default", Name: "claim1"}
-
-		// Intentionally delete the root bucket to simulate DB corruption.
-		if err := store.db.Update(func(tx *bolt.Tx) error {
+		// Delete the root bucket.
+		if err := cp.db.Update(func(tx *bolt.Tx) error {
 			return tx.DeleteBucket(podConfigsBucket)
 		}); err != nil {
 			t.Fatalf("failed to delete bucket: %v", err)
 		}
 
-		// All operations should degrade gracefully.
-		if err := store.SetDeviceConfig(podUID, deviceName, DeviceConfig{}); err == nil {
-			t.Error("expected error from SetDeviceConfig with missing root bucket")
+		// Store should fail.
+		if err := cp.Store("pod-1", "eth0", DeviceConfig{}); err == nil {
+			t.Error("expected error from Store with missing root bucket")
 		}
 
-		if _, found := store.GetDeviceConfig(podUID, deviceName); found {
-			t.Error("expected not found with missing root bucket")
+		// GetOrCreate should return empty, not error.
+		data, err := cp.GetOrCreate()
+		if err != nil {
+			t.Fatalf("GetOrCreate() error: %v", err)
 		}
-		if _, found := store.GetPodConfig(podUID); found {
-			t.Error("expected not found with missing root bucket")
+		if len(data) != 0 {
+			t.Errorf("expected empty, got %d", len(data))
 		}
 
-		store.DeletePod(podUID)
-
-		if uids := store.DeleteClaim(claim); len(uids) != 0 {
-			t.Errorf("expected no pods deleted, got %d", len(uids))
-		}
-		if acts := store.GetPodNRIActivities(); len(acts) != 0 {
-			t.Errorf("expected empty activities map, got %d entries", len(acts))
+		// DeletePod should not error.
+		if err := cp.DeletePod("pod-1"); err != nil {
+			t.Errorf("DeletePod() error: %v", err)
 		}
 	})
+}
+
+// TestPodConfigStore_NoCheckpointer verifies that PodConfigStore works
+// correctly without a checkpointer (pure in-memory).
+func TestPodConfigStore_NoCheckpointer(t *testing.T) {
+	store, err := NewPodConfigStore(nil)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore(nil) error: %v", err)
+	}
+
+	store.SetDeviceConfig("pod-1", "eth0", DeviceConfig{
+		NetworkInterfaceConfigInPod: apis.NetworkConfig{
+			Interface: apis.InterfaceConfig{Name: "eth0"},
+		},
+	})
+
+	config, found := store.GetDeviceConfig("pod-1", "eth0")
+	if !found {
+		t.Fatal("expected to find config")
+	}
+	if config.NetworkInterfaceConfigInPod.Interface.Name != "eth0" {
+		t.Errorf("unexpected name: %s", config.NetworkInterfaceConfigInPod.Interface.Name)
+	}
+
+	store.DeletePod("pod-1")
+	if _, found := store.GetDeviceConfig("pod-1", "eth0"); found {
+		t.Error("expected not found after delete")
+	}
+
+	if err := store.Close(); err != nil {
+		t.Errorf("Close() error: %v", err)
+	}
 }

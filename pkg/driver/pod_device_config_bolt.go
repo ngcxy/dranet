@@ -21,34 +21,34 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
 	berrors "go.etcd.io/bbolt/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/klog/v2"
 )
 
-// podConfigsBucket stores device configs. It serves as a root bucket
-// containing nested buckets for each pod UID.
-var podConfigsBucket = []byte("pod_configs")
+// Bucket layout:
+//
+//	pod_configs (root bucket)
+//	  └── <POD_UID> (nested bucket per pod)
+//	        └── device_configs (nested bucket for device configs)
+//	              └── <deviceName> = <JSON-encoded DeviceConfig>
+var (
+	podConfigsBucket   = []byte("pod_configs")
+	deviceConfigsKey   = []byte("device_configs")
+)
 
-// BoltPodConfigStore is a persistent implementation of podConfigStorer backed by bbolt.
-// Device configs are persisted to disk so they survive daemon restarts.
-// LastNRIActivity is ephemeral and kept in memory only.
-type BoltPodConfigStore struct {
+// boltCheckpointer implements Checkpointer backed by bbolt.
+type boltCheckpointer struct {
 	db *bolt.DB
-
-	// nriActivities tracks the last NRI activity per pod UID.
-	// This is ephemeral state used only for graceful shutdown coordination
-	// and does not need persistence.
-	mu            sync.RWMutex
-	nriActivities map[types.UID]time.Time
 }
 
-// NewBoltPodConfigStore creates a new BoltPodConfigStore at the given path.
-func NewBoltPodConfigStore(path string) (*BoltPodConfigStore, error) {
+// Compile-time interface check.
+var _ Checkpointer = &boltCheckpointer{}
+
+// newBoltCheckpointer opens (or creates) a bbolt database at the given path.
+func newBoltCheckpointer(path string) (*boltCheckpointer, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
 		return nil, fmt.Errorf("create pod config db directory: %w", err)
 	}
@@ -68,19 +68,15 @@ func NewBoltPodConfigStore(path string) (*BoltPodConfigStore, error) {
 		return nil, fmt.Errorf("initialize pod config db bucket: %w", err)
 	}
 
-	return &BoltPodConfigStore{
-		db:            db,
-		nriActivities: make(map[types.UID]time.Time),
-	}, nil
+	return &boltCheckpointer{db: db}, nil
 }
 
-// Close closes the underlying bolt database.
-func (s *BoltPodConfigStore) Close() error {
-	return s.db.Close()
+func (c *boltCheckpointer) Close() error {
+	return c.db.Close()
 }
 
-func (s *BoltPodConfigStore) SetDeviceConfig(podUID types.UID, deviceName string, config DeviceConfig) error {
-	return s.db.Update(func(tx *bolt.Tx) error {
+func (c *boltCheckpointer) Store(podUID types.UID, deviceName string, config DeviceConfig) error {
+	return c.db.Update(func(tx *bolt.Tx) error {
 		root := tx.Bucket(podConfigsBucket)
 		if root == nil {
 			return berrors.ErrBucketNotFound
@@ -89,230 +85,74 @@ func (s *BoltPodConfigStore) SetDeviceConfig(podUID types.UID, deviceName string
 		if err != nil {
 			return err
 		}
+		devBucket, err := podBucket.CreateBucketIfNotExists(deviceConfigsKey)
+		if err != nil {
+			return err
+		}
 		data, err := json.Marshal(config)
 		if err != nil {
 			return err
 		}
-		return podBucket.Put([]byte(deviceName), data)
+		return devBucket.Put([]byte(deviceName), data)
 	})
 }
 
-func (s *BoltPodConfigStore) GetDeviceConfig(podUID types.UID, deviceName string) (DeviceConfig, bool) {
-	var config DeviceConfig
-	var found bool
-	err := s.db.View(func(tx *bolt.Tx) error {
-		root := tx.Bucket(podConfigsBucket)
-		if root == nil {
-			return nil
-		}
-		podBucket := root.Bucket([]byte(podUID))
-		if podBucket == nil {
-			return nil
-		}
-		data := podBucket.Get([]byte(deviceName))
-		if data == nil {
-			return nil
-		}
-		found = true
-		return json.Unmarshal(data, &config)
-	})
-	if err != nil {
-		klog.Errorf("BoltPodConfigStore: failed to get device config for pod %s device %s: %v", podUID, deviceName, err)
-		return DeviceConfig{}, false
-	}
-	return config, found
-}
-
-func (s *BoltPodConfigStore) GetPodConfig(podUID types.UID) (PodConfig, bool) {
-	podConfig := PodConfig{
-		DeviceConfigs: make(map[string]DeviceConfig),
-	}
-	var found bool
-	err := s.db.View(func(tx *bolt.Tx) error {
-		root := tx.Bucket(podConfigsBucket)
-		if root == nil {
-			return nil
-		}
-		podBucket := root.Bucket([]byte(podUID))
-		if podBucket == nil {
-			return nil
-		}
-		return podBucket.ForEach(func(k, v []byte) error {
-			if v == nil {
-				return nil // Skip nested buckets if any exist
-			}
-			var config DeviceConfig
-			if err := json.Unmarshal(v, &config); err != nil {
-				klog.Errorf("BoltPodConfigStore: failed to unmarshal device config for pod %s device %s: %v", podUID, string(k), err)
-				return nil // skip corrupted entries
-			}
-			podConfig.DeviceConfigs[string(k)] = config
-			found = true
-			return nil
-		})
-	})
-	if err != nil {
-		klog.Errorf("BoltPodConfigStore: failed to get pod config for pod %s: %v", podUID, err)
-		return PodConfig{}, false
-	}
-	if !found {
-		return PodConfig{}, false
-	}
-
-	// Attach ephemeral NRI activity.
-	s.mu.RLock()
-	podConfig.LastNRIActivity = s.nriActivities[podUID]
-	s.mu.RUnlock()
-
-	return podConfig, true
-}
-
-func (s *BoltPodConfigStore) DeletePod(podUID types.UID) {
-	err := s.db.Update(func(tx *bolt.Tx) error {
-		root := tx.Bucket(podConfigsBucket)
-		if root == nil {
-			return berrors.ErrBucketNotFound
-		}
-		err := root.DeleteBucket([]byte(podUID))
-		if err == berrors.ErrBucketNotFound {
-			return nil // Pod already deleted or does not exist
-		}
-		return err
-	})
-	if err != nil {
-		klog.Errorf("BoltPodConfigStore: failed to delete pod %s: %v", podUID, err)
-	}
-
-	s.mu.Lock()
-	delete(s.nriActivities, podUID)
-	s.mu.Unlock()
-}
-
-// ListPods returns the UIDs of all pods in the store.
-func (s *BoltPodConfigStore) ListPods() []types.UID {
-	var uids []types.UID
-	err := s.db.View(func(tx *bolt.Tx) error {
-		root := tx.Bucket(podConfigsBucket)
-		if root == nil {
-			return nil
-		}
-		return root.ForEach(func(k, v []byte) error {
-			if v == nil { // nested bucket = pod UID
-				uids = append(uids, types.UID(string(k)))
-			}
-			return nil
-		})
-	})
-	if err != nil {
-		klog.Errorf("BoltPodConfigStore: failed to list pods: %v", err)
-		return nil
-	}
-	return uids
-}
-
-func (s *BoltPodConfigStore) DeleteClaim(claim types.NamespacedName) []types.UID {
-	var podsToDelete []types.UID
-	err := s.db.View(func(tx *bolt.Tx) error {
+func (c *boltCheckpointer) GetOrCreate() (map[types.UID]map[string]DeviceConfig, error) {
+	result := make(map[types.UID]map[string]DeviceConfig)
+	err := c.db.View(func(tx *bolt.Tx) error {
 		root := tx.Bucket(podConfigsBucket)
 		if root == nil {
 			return nil
 		}
 		return root.ForEach(func(podUID, v []byte) error {
 			if v != nil {
-				return nil // Not a nested bucket
+				return nil // not a nested bucket, skip
 			}
 			podBucket := root.Bucket(podUID)
 			if podBucket == nil {
 				return nil
 			}
-			matched := false
-			err := podBucket.ForEach(func(deviceName, data []byte) error {
-				if data == nil || matched {
-					return nil
+			devBucket := podBucket.Bucket(deviceConfigsKey)
+			if devBucket == nil {
+				return nil
+			}
+			devices := make(map[string]DeviceConfig)
+			err := devBucket.ForEach(func(deviceName, data []byte) error {
+				if data == nil {
+					return nil // skip nested buckets
 				}
-				var config DeviceConfig
-				if err := json.Unmarshal(data, &config); err != nil {
-					return nil // skip corrupted entries
+				var cfg DeviceConfig
+				if err := json.Unmarshal(data, &cfg); err != nil {
+					return fmt.Errorf("corrupted device config for pod %s device %s: %w", string(podUID), string(deviceName), err)
 				}
-				if config.Claim == claim {
-					matched = true
-				}
+				devices[string(deviceName)] = cfg
 				return nil
 			})
 			if err != nil {
 				return err
 			}
-			if matched {
-				podsToDelete = append(podsToDelete, types.UID(string(podUID)))
+			if len(devices) > 0 {
+				result[types.UID(string(podUID))] = devices
 			}
 			return nil
 		})
 	})
 	if err != nil {
-		klog.Errorf("BoltPodConfigStore: failed to scan for claim %s: %v", claim, err)
-		return nil
+		return nil, fmt.Errorf("read pod config checkpoint: %w", err)
 	}
-
-	// Delete all entries for matched pods.
-	for _, podUID := range podsToDelete {
-		s.DeletePod(podUID)
-	}
-	return podsToDelete
+	return result, nil
 }
 
-func (s *BoltPodConfigStore) UpdateLastNRIActivity(podUID types.UID, timestamp time.Time) {
-	// Only update if pod has persisted configs (i.e., exists in bolt).
-	var exists bool
-	err := s.db.View(func(tx *bolt.Tx) error {
-		root := tx.Bucket(podConfigsBucket)
-		if root != nil {
-			exists = root.Bucket([]byte(podUID)) != nil
-		}
-		return nil
-	})
-	if err != nil {
-		klog.Errorf("BoltPodConfigStore: failed to check pod existence for %s: %v", podUID, err)
-		return
-	}
-	if !exists {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.nriActivities[podUID] = timestamp
-}
-
-func (s *BoltPodConfigStore) GetPodNRIActivities() map[types.UID]time.Time {
-	// Return activities for all pods that exist in the bolt store.
-	activities := make(map[types.UID]time.Time)
-
-	// Collect all unique pod UIDs from bolt.
-	err := s.db.View(func(tx *bolt.Tx) error {
+func (c *boltCheckpointer) DeletePod(podUID types.UID) error {
+	return c.db.Update(func(tx *bolt.Tx) error {
 		root := tx.Bucket(podConfigsBucket)
 		if root == nil {
 			return nil
 		}
-		return root.ForEach(func(podUID, v []byte) error {
-			if v == nil { // It's a bucket
-				activities[types.UID(string(podUID))] = time.Time{}
-			}
+		err := root.DeleteBucket([]byte(podUID))
+		if err == berrors.ErrBucketNotFound {
 			return nil
-		})
-	})
-	if err != nil {
-		klog.Errorf("BoltPodConfigStore: failed to list pods for NRI activities: %v", err)
-		return nil
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for uid := range activities {
-		if act, ok := s.nriActivities[uid]; ok {
-			activities[uid] = act
 		}
-	}
-	return activities
+		return err
+	})
 }
-
-// Compile-time interface check.
-var _ podConfigStorer = &BoltPodConfigStore{}

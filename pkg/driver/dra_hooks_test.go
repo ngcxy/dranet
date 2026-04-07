@@ -193,7 +193,7 @@ func TestUnprepareResourceClaimsMetrics(t *testing.T) {
 		draPluginRequestsLatencySeconds.Reset()
 
 		np := &NetworkDriver{
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 		}
 		claimName := types.NamespacedName{Name: "test-claim", Namespace: "test-ns"}
 		np.podConfigStore.SetDeviceConfig("pod-uid-1", "device-a", DeviceConfig{Claim: claimName})

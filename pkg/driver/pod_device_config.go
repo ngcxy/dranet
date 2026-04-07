@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/dranet/pkg/apis"
 )
 
@@ -81,25 +82,63 @@ type LinuxDevice struct {
 	GID      uint32 `json:"gid"`
 }
 
+// Checkpointer is the persistence interface for the PodConfigStore.
+// It provides durable storage so that pod device configurations survive
+// daemon restarts. Following the kubelet DRA checkpoint pattern
+// (pkg/kubelet/cm/dra/state), the in-memory PodConfigStore is the source
+// of truth and the Checkpointer is a write-through backend.
+type Checkpointer interface {
+	// GetOrCreate returns all persisted pod device configs, or an empty map
+	// if the checkpoint does not yet exist. Used at startup to restore state.
+	GetOrCreate() (map[types.UID]map[string]DeviceConfig, error)
+	// Store persists the device config for a single pod/device pair.
+	Store(podUID types.UID, deviceName string, config DeviceConfig) error
+	// DeletePod removes all persisted state for the given pod.
+	DeletePod(podUID types.UID) error
+	// Close releases any resources held by the checkpointer.
+	Close() error
+}
+
 // PodConfigStore provides a thread-safe, centralized store for all network
 // device configurations across multiple Pods. It is indexed by the Pod's UID.
+// All reads are served from memory. If a Checkpointer is provided, mutations
+// are written through to durable storage.
 type PodConfigStore struct {
-	mu      sync.RWMutex
-	configs map[types.UID]PodConfig
+	mu           sync.RWMutex
+	configs      map[types.UID]PodConfig
+	checkpointer Checkpointer // nil when no persistence is configured
 }
 
-// Compile-time interface check.
-var _ podConfigStorer = &PodConfigStore{}
-
-// NewPodConfigStore creates and returns a new instance of PodConfigStore.
-func NewPodConfigStore() *PodConfigStore {
-	return &PodConfigStore{
-		configs: make(map[types.UID]PodConfig),
+// NewPodConfigStore creates a new PodConfigStore. If a Checkpointer is
+// provided, existing state is loaded from the checkpoint into memory.
+func NewPodConfigStore(checkpointer Checkpointer) (*PodConfigStore, error) {
+	s := &PodConfigStore{
+		configs:      make(map[types.UID]PodConfig),
+		checkpointer: checkpointer,
 	}
+
+	if checkpointer != nil {
+		saved, err := checkpointer.GetOrCreate()
+		if err != nil {
+			return nil, err
+		}
+		for podUID, devices := range saved {
+			s.configs[podUID] = PodConfig{
+				DeviceConfigs: devices,
+			}
+		}
+	}
+
+	return s, nil
 }
 
-// Close is a no-op for the in-memory store.
-func (s *PodConfigStore) Close() error { return nil }
+// Close closes the underlying checkpointer, if any.
+func (s *PodConfigStore) Close() error {
+	if s.checkpointer != nil {
+		return s.checkpointer.Close()
+	}
+	return nil
+}
 
 // UpdateLastNRIActivity updates the LastNRIActivity timestamp for a given Pod UID.
 // If the PodConfig doesn't exist, it does nothing.
@@ -125,9 +164,20 @@ func (s *PodConfigStore) GetPodNRIActivities() map[types.UID]time.Time {
 
 // SetDeviceConfig stores the configuration for a specific device under a given Pod UID.
 // If a configuration for the Pod UID or device name already exists, it will be overwritten.
+// The write is persisted through the checkpointer if one is configured.
+// Persistence is attempted before updating in-memory state to ensure RAM and
+// disk don't diverge if the checkpoint write fails.
 func (s *PodConfigStore) SetDeviceConfig(podUID types.UID, deviceName string, config DeviceConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.checkpointer != nil {
+		if err := s.checkpointer.Store(podUID, deviceName, config); err != nil {
+			klog.Errorf("failed to checkpoint device config for pod %s device %s: %v", podUID, deviceName, err)
+			return err
+		}
+	}
+
 	podConfig, ok := s.configs[podUID]
 	if !ok {
 		podConfig = PodConfig{
@@ -152,9 +202,25 @@ func (s *PodConfigStore) GetDeviceConfig(podUID types.UID, deviceName string) (D
 }
 
 // DeletePod removes all configurations associated with a given Pod UID.
+// Checkpoint deletion is attempted first, but the in-memory entry is removed
+// regardless of checkpoint outcome. This asymmetry with SetDeviceConfig
+// (which aborts on checkpoint failure) is intentional:
+//   - A failed Set leaving stale RAM would silently lose config on restart (#89).
+//   - A failed Delete leaving a stale checkpoint is harmless: Synchronize()
+//     prunes orphaned checkpoint entries on the next startup by diffing
+//     against live pods from the container runtime.
+//
+// Skipping the RAM delete would be worse — the driver would keep processing
+// a pod that the runtime has already removed.
 func (s *PodConfigStore) DeletePod(podUID types.UID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.checkpointer != nil {
+		if err := s.checkpointer.DeletePod(podUID); err != nil {
+			klog.Errorf("failed to delete checkpoint for pod %s: %v", podUID, err)
+		}
+	}
 	delete(s.configs, podUID)
 }
 
@@ -191,6 +257,8 @@ func (s *PodConfigStore) GetPodConfig(podUID types.UID) (PodConfig, bool) {
 
 // DeleteClaim removes all configurations associated with a given claim and
 // returns the list of Pod UIDs that were associated with it.
+// Like DeletePod, checkpoint failures do not prevent in-memory cleanup.
+// See DeletePod for rationale on this intentional asymmetry with SetDeviceConfig.
 func (s *PodConfigStore) DeleteClaim(claim types.NamespacedName) []types.UID {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,6 +273,11 @@ func (s *PodConfigStore) DeleteClaim(claim types.NamespacedName) []types.UID {
 	}
 
 	for _, uid := range podsToDelete {
+		if s.checkpointer != nil {
+			if err := s.checkpointer.DeletePod(uid); err != nil {
+				klog.Errorf("failed to delete checkpoint for pod %s: %v", uid, err)
+			}
+		}
 		delete(s.configs, uid)
 	}
 	return podsToDelete

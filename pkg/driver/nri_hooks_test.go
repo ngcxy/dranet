@@ -31,7 +31,7 @@ import (
 
 func TestCreateContainerNoDuplicateDevices(t *testing.T) {
 	np := &NetworkDriver{
-		podConfigStore: NewPodConfigStore(),
+		podConfigStore: mustNewPodConfigStore(),
 	}
 
 	podUID := types.UID("test-pod")
@@ -79,18 +79,26 @@ func TestCreateContainerUsesPersistedConfigAfterRestart(t *testing.T) {
 	}
 
 	// Simulate NodePrepareResource storing config before the driver restarts.
-	storeBeforeRestart, err := NewBoltPodConfigStore(dbPath)
+	cp1, err := newBoltCheckpointer(dbPath)
 	if err != nil {
-		t.Fatalf("NewBoltPodConfigStore() error: %v", err)
+		t.Fatalf("newBoltCheckpointer() error: %v", err)
 	}
-	storeBeforeRestart.SetDeviceConfig(podUID, "eth0", deviceCfg) //nolint:errcheck
-	if err := storeBeforeRestart.Close(); err != nil {
+	store1, err := NewPodConfigStore(cp1)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() error: %v", err)
+	}
+	store1.SetDeviceConfig(podUID, "eth0", deviceCfg) //nolint:errcheck
+	if err := store1.Close(); err != nil {
 		t.Fatalf("Close() error: %v", err)
 	}
 
-	storeAfterRestart, err := NewBoltPodConfigStore(dbPath)
+	cp2, err := newBoltCheckpointer(dbPath)
 	if err != nil {
-		t.Fatalf("NewBoltPodConfigStore() after restart error: %v", err)
+		t.Fatalf("newBoltCheckpointer() after restart error: %v", err)
+	}
+	storeAfterRestart, err := NewPodConfigStore(cp2)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() after restart error: %v", err)
 	}
 	defer storeAfterRestart.Close()
 
@@ -129,21 +137,29 @@ func TestRunPodSandboxUsesPersistedConfigAfterRestart(t *testing.T) {
 	}
 
 	// Simulate NodePrepareResource storing config before the driver restarts.
-	storeBeforeRestart, err := NewBoltPodConfigStore(dbPath)
+	cp1, err := newBoltCheckpointer(dbPath)
 	if err != nil {
-		t.Fatalf("NewBoltPodConfigStore() error: %v", err)
+		t.Fatalf("newBoltCheckpointer() error: %v", err)
 	}
-	if err := storeBeforeRestart.SetDeviceConfig(podUID, "eth0", deviceCfg); err != nil {
+	store1, err := NewPodConfigStore(cp1)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() error: %v", err)
+	}
+	if err := store1.SetDeviceConfig(podUID, "eth0", deviceCfg); err != nil {
 		t.Fatalf("SetDeviceConfig() error: %v", err)
 	}
-	if err := storeBeforeRestart.Close(); err != nil {
+	if err := store1.Close(); err != nil {
 		t.Fatalf("Close() error: %v", err)
 	}
 
 	// Reopen store to simulate driver restart.
-	storeAfterRestart, err := NewBoltPodConfigStore(dbPath)
+	cp2, err := newBoltCheckpointer(dbPath)
 	if err != nil {
-		t.Fatalf("NewBoltPodConfigStore() after restart error: %v", err)
+		t.Fatalf("newBoltCheckpointer() after restart error: %v", err)
+	}
+	storeAfterRestart, err := NewPodConfigStore(cp2)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() after restart error: %v", err)
 	}
 	defer storeAfterRestart.Close()
 
@@ -172,7 +188,7 @@ func TestRunPodSandboxUsesPersistedConfigAfterRestart(t *testing.T) {
 }
 
 func TestSynchronizePrunesStaleConfigs(t *testing.T) {
-	store := NewPodConfigStore()
+	store := mustNewPodConfigStore()
 	store.SetDeviceConfig("live-pod", "eth0", DeviceConfig{})   //nolint:errcheck
 	store.SetDeviceConfig("stale-pod", "eth0", DeviceConfig{})  //nolint:errcheck
 	store.SetDeviceConfig("stale-pod2", "eth0", DeviceConfig{}) //nolint:errcheck
@@ -212,12 +228,12 @@ func TestSynchronizePrunesStaleConfigs(t *testing.T) {
 func TestCreateContainerMetrics(t *testing.T) {
 	testCases := []struct {
 		name           string
-		podConfigStore podConfigStorer
+		podConfigStore *PodConfigStore
 		expectSuccess  bool
 	}{
 		{
 			name:           "Success",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			expectSuccess:  true,
 		},
 	}
@@ -286,13 +302,13 @@ func TestRunPodSandboxMetrics(t *testing.T) {
 
 	testCases := []struct {
 		name           string
-		podConfigStore podConfigStorer
+		podConfigStore *PodConfigStore
 		pod            *api.PodSandbox
 		expectSuccess  bool
 	}{
 		{
 			name:           "Success",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			pod: &api.PodSandbox{
 				Uid:       string(podUID),
 				Name:      "test-pod",
@@ -310,7 +326,7 @@ func TestRunPodSandboxMetrics(t *testing.T) {
 		},
 		{
 			name:           "Failure - Host Network",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			pod: &api.PodSandbox{
 				Uid:       string(podUIDHostNetwork),
 				Name:      "test-pod-host-network",
@@ -382,12 +398,12 @@ func TestRunPodSandboxMetrics(t *testing.T) {
 func TestStopPodSandboxMetrics(t *testing.T) {
 	testCases := []struct {
 		name           string
-		podConfigStore podConfigStorer
+		podConfigStore *PodConfigStore
 		expectSuccess  bool
 	}{
 		{
 			name:           "Success",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			expectSuccess:  true,
 		},
 	}
@@ -449,12 +465,12 @@ func TestStopPodSandboxMetrics(t *testing.T) {
 func TestRemovePodSandboxMetrics(t *testing.T) {
 	testCases := []struct {
 		name           string
-		podConfigStore podConfigStorer
+		podConfigStore *PodConfigStore
 		expectSuccess  bool
 	}{
 		{
 			name:           "Success",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			expectSuccess:  true,
 		},
 	}

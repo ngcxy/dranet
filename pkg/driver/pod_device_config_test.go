@@ -26,18 +26,27 @@ import (
 	"sigs.k8s.io/dranet/pkg/apis"
 )
 
+// mustNewPodConfigStore creates a PodConfigStore with no checkpointer for use in tests.
+func mustNewPodConfigStore() *PodConfigStore {
+	s, err := NewPodConfigStore(nil)
+	if err != nil {
+		panic(fmt.Sprintf("NewPodConfigStore(nil) should never fail: %v", err))
+	}
+	return s
+}
+
 func TestNewPodConfigStore(t *testing.T) {
-	store := NewPodConfigStore()
+	store := mustNewPodConfigStore()
 	if store == nil {
-		t.Fatal("NewPodConfigStore() returned nil")
+		t.Fatal("mustNewPodConfigStore() returned nil")
 	}
 	if store.configs == nil {
-		t.Error("NewPodConfigStore() did not initialize configs map")
+		t.Error("mustNewPodConfigStore() did not initialize configs map")
 	}
 }
 
 func TestPodConfigStore_SetAndGet(t *testing.T) {
-	store := NewPodConfigStore()
+	store := mustNewPodConfigStore()
 	podUID := types.UID("test-pod-uid-1")
 	deviceName := "eth0"
 	config := DeviceConfig{
@@ -99,7 +108,7 @@ func TestPodConfigStore_SetAndGet(t *testing.T) {
 }
 
 func TestPodConfigStore_DeletePod(t *testing.T) {
-	store := NewPodConfigStore()
+	store := mustNewPodConfigStore()
 	podUID1 := types.UID("test-pod-uid-1")
 	podUID2 := types.UID("test-pod-uid-2")
 	dev1 := "eth0"
@@ -136,7 +145,7 @@ func TestPodConfigStore_DeletePod(t *testing.T) {
 }
 
 func TestPodConfigStore_GetPodConfigs(t *testing.T) {
-	store := NewPodConfigStore()
+	store := mustNewPodConfigStore()
 	podUID1 := types.UID("test-pod-uid-1")
 	podUID2 := types.UID("test-pod-uid-2")
 	dev1 := "eth0"
@@ -177,7 +186,7 @@ func TestPodConfigStore_GetPodConfigs(t *testing.T) {
 }
 
 func TestPodConfigStore_ThreadSafety(t *testing.T) {
-	store := NewPodConfigStore()
+	store := mustNewPodConfigStore()
 	numGoroutines := 100
 	var wg sync.WaitGroup
 
@@ -231,7 +240,7 @@ func TestPodConfigStore_DeleteClaim(t *testing.T) {
 		{
 			name: "delete claim associated with one pod, one device",
 			initialConfigs: func() *PodConfigStore {
-				s := NewPodConfigStore()
+				s := mustNewPodConfigStore()
 				s.SetDeviceConfig(podUID3, dev1, config3_1) // Pod3 has Claim2
 				s.SetDeviceConfig(podUID1, dev1, config1_1) // Pod1 has Claim1
 				return s
@@ -244,7 +253,7 @@ func TestPodConfigStore_DeleteClaim(t *testing.T) {
 		{
 			name: "delete claim associated with multiple pods",
 			initialConfigs: func() *PodConfigStore {
-				s := NewPodConfigStore()
+				s := mustNewPodConfigStore()
 				s.SetDeviceConfig(podUID1, dev1, config1_1) // Pod1, Dev1, Claim1
 				s.SetDeviceConfig(podUID1, dev2, config1_2) // Pod1, Dev2, Claim1
 				s.SetDeviceConfig(podUID2, dev1, config2_1) // Pod2, Dev1, Claim1
@@ -259,7 +268,7 @@ func TestPodConfigStore_DeleteClaim(t *testing.T) {
 		{
 			name: "delete non-existent claim",
 			initialConfigs: func() *PodConfigStore {
-				s := NewPodConfigStore()
+				s := mustNewPodConfigStore()
 				s.SetDeviceConfig(podUID1, dev1, config1_1)
 				return s
 			},
@@ -271,7 +280,7 @@ func TestPodConfigStore_DeleteClaim(t *testing.T) {
 		{
 			name: "delete claim from empty store",
 			initialConfigs: func() *PodConfigStore {
-				return NewPodConfigStore()
+				return mustNewPodConfigStore()
 			},
 			claimToDelete:     claim1,
 			expectedPodsAfter: map[types.UID]PodConfig{},
@@ -294,7 +303,7 @@ func TestPodConfigStore_DeleteClaim(t *testing.T) {
 }
 
 func TestPodConfigStore_NoDuplicateDevices(t *testing.T) {
-	store := NewPodConfigStore()
+	store := mustNewPodConfigStore()
 	podUID := types.UID("test-pod-uid-1")
 	deviceName1 := "eth0"
 	config1 := DeviceConfig{

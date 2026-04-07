@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/dranet/internal/nlwrap"
 
 	resourceapi "k8s.io/api/resource/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
@@ -70,20 +69,6 @@ type inventoryDB interface {
 	GetPodNetNs(podKey string) (netNs string)
 }
 
-// podConfigStorer is the interface for all operations on the pod config store.
-// It is implemented by PodConfigStore (in-memory) and BoltPodConfigStore (persistent).
-type podConfigStorer interface {
-	SetDeviceConfig(podUID types.UID, deviceName string, config DeviceConfig) error
-	GetDeviceConfig(podUID types.UID, deviceName string) (DeviceConfig, bool)
-	GetPodConfig(podUID types.UID) (PodConfig, bool)
-	ListPods() []types.UID
-	DeletePod(podUID types.UID)
-	DeleteClaim(claim types.NamespacedName) []types.UID
-	UpdateLastNRIActivity(podUID types.UID, timestamp time.Time)
-	GetPodNRIActivities() map[types.UID]time.Time
-	Close() error
-}
-
 // WithFilter
 func WithFilter(filter cel.Program) Option {
 	return func(o *NetworkDriver) {
@@ -119,7 +104,7 @@ type NetworkDriver struct {
 
 	// Cache the rdma shared mode state
 	rdmaSharedMode bool
-	podConfigStore podConfigStorer
+	podConfigStore *PodConfigStore
 	dbPath         string // path for persistent bbolt database; empty means in-memory
 
 	clock clock.WithTicker // Injectable clock for testing
@@ -150,17 +135,23 @@ func Start(ctx context.Context, driverName string, kubeClient kubernetes.Interfa
 		o(plugin)
 	}
 
-	// Initialize the pod config store: persistent (bbolt) if a DB path was
-	// configured, in-memory otherwise.
+	// Initialize the pod config store with optional bbolt checkpoint backend.
+	var checkpointer Checkpointer
 	if plugin.dbPath != "" {
-		boltStore, err := NewBoltPodConfigStore(plugin.dbPath)
+		var err error
+		checkpointer, err = newBoltCheckpointer(plugin.dbPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to open pod config database at %s: %v", plugin.dbPath, err)
 		}
-		plugin.podConfigStore = boltStore
-	} else {
-		plugin.podConfigStore = NewPodConfigStore()
 	}
+	store, err := NewPodConfigStore(checkpointer)
+	if err != nil {
+		if checkpointer != nil {
+			checkpointer.Close()
+		}
+		return nil, fmt.Errorf("failed to initialize pod config store: %v", err)
+	}
+	plugin.podConfigStore = store
 
 	driverPluginPath := filepath.Join(kubeletPluginPath, driverName)
 	err = os.MkdirAll(driverPluginPath, 0750)
