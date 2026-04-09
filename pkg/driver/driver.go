@@ -41,8 +41,7 @@ import (
 )
 
 const (
-	kubeletPluginRegistryPath = "/var/lib/kubelet/plugins_registry"
-	kubeletPluginPath         = "/var/lib/kubelet/plugins"
+	kubeletPluginPath = "/var/lib/kubelet/plugins"
 )
 
 const (
@@ -84,6 +83,14 @@ func WithInventory(db inventoryDB) Option {
 	}
 }
 
+// WithDBPath sets the path for the persistent pod config database.
+// If not set, an in-memory store is used.
+func WithDBPath(path string) Option {
+	return func(o *NetworkDriver) {
+		o.dbPath = path
+	}
+}
+
 type NetworkDriver struct {
 	driverName string
 	nodeName   string
@@ -98,6 +105,7 @@ type NetworkDriver struct {
 	// Cache the rdma shared mode state
 	rdmaSharedMode bool
 	podConfigStore *PodConfigStore
+	dbPath         string // path for persistent bbolt database; empty means in-memory
 
 	clock clock.WithTicker // Injectable clock for testing
 }
@@ -120,13 +128,30 @@ func Start(ctx context.Context, driverName string, kubeClient kubernetes.Interfa
 		nodeName:       nodeName,
 		kubeClient:     kubeClient,
 		rdmaSharedMode: rdmaNetnsMode == apis.RdmaNetnsModeShared,
-		podConfigStore: NewPodConfigStore(),
 		clock:          clock.RealClock{},
 	}
 
 	for _, o := range opts {
 		o(plugin)
 	}
+
+	// Initialize the pod config store with optional bbolt checkpoint backend.
+	var checkpointer Checkpointer
+	if plugin.dbPath != "" {
+		var err error
+		checkpointer, err = newBoltCheckpointer(plugin.dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open pod config database at %s: %v", plugin.dbPath, err)
+		}
+	}
+	store, err := NewPodConfigStore(checkpointer)
+	if err != nil {
+		if checkpointer != nil {
+			checkpointer.Close()
+		}
+		return nil, fmt.Errorf("failed to initialize pod config store: %v", err)
+	}
+	plugin.podConfigStore = store
 
 	driverPluginPath := filepath.Join(kubeletPluginPath, driverName)
 	err = os.MkdirAll(driverPluginPath, 0750)
@@ -312,5 +337,11 @@ func (np *NetworkDriver) Stop(ctxCancel context.CancelFunc) {
 	ctxCancel()
 
 	np.nriPlugin.Stop()
+
+	// Close the pod config store.
+	if err := np.podConfigStore.Close(); err != nil {
+		klog.Errorf("Failed to close pod config database: %v", err)
+	}
+
 	klog.Info("Driver stopped.")
 }

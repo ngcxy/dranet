@@ -18,18 +18,20 @@ package driver
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/containerd/nri/pkg/api"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/dranet/pkg/apis"
 	"sigs.k8s.io/dranet/pkg/inventory"
 )
 
 func TestCreateContainerNoDuplicateDevices(t *testing.T) {
 	np := &NetworkDriver{
-		podConfigStore: NewPodConfigStore(),
+		podConfigStore: mustNewPodConfigStore(),
 	}
 
 	podUID := types.UID("test-pod")
@@ -65,6 +67,164 @@ func TestCreateContainerNoDuplicateDevices(t *testing.T) {
 	}
 }
 
+func TestCreateContainerUsesPersistedConfigAfterRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "pod_configs.db")
+	podUID := types.UID("test-pod")
+	deviceCfg := DeviceConfig{
+		RDMADevice: RDMAConfig{
+			DevChars: []LinuxDevice{
+				{Path: "/dev/infiniband/uverbs0", Type: "c", Major: 231, Minor: 192},
+			},
+		},
+	}
+
+	// Simulate NodePrepareResource storing config before the driver restarts.
+	cp1, err := newBoltCheckpointer(dbPath)
+	if err != nil {
+		t.Fatalf("newBoltCheckpointer() error: %v", err)
+	}
+	store1, err := NewPodConfigStore(cp1)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() error: %v", err)
+	}
+	store1.SetDeviceConfig(podUID, "eth0", deviceCfg) //nolint:errcheck
+	if err := store1.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+
+	cp2, err := newBoltCheckpointer(dbPath)
+	if err != nil {
+		t.Fatalf("newBoltCheckpointer() after restart error: %v", err)
+	}
+	storeAfterRestart, err := NewPodConfigStore(cp2)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() after restart error: %v", err)
+	}
+	defer storeAfterRestart.Close()
+
+	np := &NetworkDriver{podConfigStore: storeAfterRestart}
+	pod := &api.PodSandbox{Uid: string(podUID), Name: "test-pod", Namespace: "test-ns"}
+	ctr := &api.Container{Name: "test-container"}
+
+	adjust, _, err := np.CreateContainer(context.Background(), pod, ctr)
+	if err != nil {
+		t.Fatalf("CreateContainer failed: %v", err)
+	}
+	if adjust == nil || adjust.Linux == nil {
+		t.Fatalf("CreateContainer returned nil container adjustment")
+	}
+	if len(adjust.Linux.Devices) != 1 {
+		t.Fatalf("expected 1 injected RDMA char device after restart, got %d", len(adjust.Linux.Devices))
+	}
+	if got := adjust.Linux.Devices[0].Path; got != "/dev/infiniband/uverbs0" {
+		t.Fatalf("unexpected injected device path %q", got)
+	}
+}
+
+func TestRunPodSandboxUsesPersistedConfigAfterRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "dranet.db")
+	podUID := types.UID("test-pod-sandbox")
+	deviceCfg := DeviceConfig{
+		Claim: types.NamespacedName{Namespace: "ns", Name: "claim1"},
+		// Set a host interface name so runPodSandbox takes the netdev path,
+		// which will fail (no real interface) — proving the config was found.
+		NetworkInterfaceConfigInHost: apis.NetworkConfig{
+			Interface: apis.InterfaceConfig{Name: "nonexistent0"},
+		},
+		NetworkInterfaceConfigInPod: apis.NetworkConfig{
+			Interface: apis.InterfaceConfig{Name: "eth0-pod"},
+		},
+	}
+
+	// Simulate NodePrepareResource storing config before the driver restarts.
+	cp1, err := newBoltCheckpointer(dbPath)
+	if err != nil {
+		t.Fatalf("newBoltCheckpointer() error: %v", err)
+	}
+	store1, err := NewPodConfigStore(cp1)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() error: %v", err)
+	}
+	if err := store1.SetDeviceConfig(podUID, "eth0", deviceCfg); err != nil {
+		t.Fatalf("SetDeviceConfig() error: %v", err)
+	}
+	if err := store1.Close(); err != nil {
+		t.Fatalf("Close() error: %v", err)
+	}
+
+	// Reopen store to simulate driver restart.
+	cp2, err := newBoltCheckpointer(dbPath)
+	if err != nil {
+		t.Fatalf("newBoltCheckpointer() after restart error: %v", err)
+	}
+	storeAfterRestart, err := NewPodConfigStore(cp2)
+	if err != nil {
+		t.Fatalf("NewPodConfigStore() after restart error: %v", err)
+	}
+	defer storeAfterRestart.Close()
+
+	np := &NetworkDriver{
+		podConfigStore: storeAfterRestart,
+		netdb:          inventory.New(),
+	}
+	pod := &api.PodSandbox{
+		Uid:       string(podUID),
+		Name:      "test-pod-sandbox",
+		Namespace: "test-ns",
+		Linux: &api.LinuxPodSandbox{
+			Namespaces: []*api.LinuxNamespace{
+				{Type: "network", Path: "/var/run/netns/test"},
+			},
+		},
+	}
+
+	// RunPodSandbox should find the persisted config and attempt netdev
+	// operations, which will fail (no real interface). An error proves the
+	// config was found — a nil return would mean the config was missing.
+	err = np.RunPodSandbox(context.Background(), pod)
+	if err == nil {
+		t.Fatal("expected RunPodSandbox to error (config found, netdev ops fail), got nil (config missing?)")
+	}
+}
+
+func TestSynchronizePrunesStaleConfigs(t *testing.T) {
+	store := mustNewPodConfigStore()
+	store.SetDeviceConfig("live-pod", "eth0", DeviceConfig{})   //nolint:errcheck
+	store.SetDeviceConfig("stale-pod", "eth0", DeviceConfig{})  //nolint:errcheck
+	store.SetDeviceConfig("stale-pod2", "eth0", DeviceConfig{}) //nolint:errcheck
+
+	np := &NetworkDriver{
+		podConfigStore: store,
+		netdb:          inventory.New(),
+	}
+
+	// Synchronize with only "live-pod" present in the runtime.
+	pods := []*api.PodSandbox{
+		{
+			Uid:       "live-pod",
+			Name:      "live",
+			Namespace: "default",
+			Linux:     &api.LinuxPodSandbox{},
+		},
+	}
+	_, err := np.Synchronize(context.Background(), pods, nil)
+	if err != nil {
+		t.Fatalf("Synchronize() error: %v", err)
+	}
+
+	// live-pod should still be in the store.
+	if _, found := store.GetPodConfig("live-pod"); !found {
+		t.Error("live-pod should still exist after sync")
+	}
+	// stale pods should be pruned.
+	if _, found := store.GetPodConfig("stale-pod"); found {
+		t.Error("stale-pod should have been pruned")
+	}
+	if _, found := store.GetPodConfig("stale-pod2"); found {
+		t.Error("stale-pod2 should have been pruned")
+	}
+}
+
 func TestCreateContainerMetrics(t *testing.T) {
 	testCases := []struct {
 		name           string
@@ -73,7 +233,7 @@ func TestCreateContainerMetrics(t *testing.T) {
 	}{
 		{
 			name:           "Success",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			expectSuccess:  true,
 		},
 	}
@@ -148,7 +308,7 @@ func TestRunPodSandboxMetrics(t *testing.T) {
 	}{
 		{
 			name:           "Success",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			pod: &api.PodSandbox{
 				Uid:       string(podUID),
 				Name:      "test-pod",
@@ -166,7 +326,7 @@ func TestRunPodSandboxMetrics(t *testing.T) {
 		},
 		{
 			name:           "Failure - Host Network",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			pod: &api.PodSandbox{
 				Uid:       string(podUIDHostNetwork),
 				Name:      "test-pod-host-network",
@@ -243,7 +403,7 @@ func TestStopPodSandboxMetrics(t *testing.T) {
 	}{
 		{
 			name:           "Success",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			expectSuccess:  true,
 		},
 	}
@@ -310,7 +470,7 @@ func TestRemovePodSandboxMetrics(t *testing.T) {
 	}{
 		{
 			name:           "Success",
-			podConfigStore: NewPodConfigStore(),
+			podConfigStore: mustNewPodConfigStore(),
 			expectSuccess:  true,
 		},
 	}

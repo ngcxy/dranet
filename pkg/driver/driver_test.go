@@ -107,7 +107,7 @@ func TestStop(t *testing.T) {
 	np := &NetworkDriver{
 		draPlugin:      fakeDra,
 		nriPlugin:      fakeNri,
-		podConfigStore: NewPodConfigStore(),
+		podConfigStore: mustNewPodConfigStore(),
 		clock:          fakeClock,
 	}
 
