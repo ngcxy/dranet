@@ -417,7 +417,6 @@ func (np *NetworkDriver) RemovePodSandbox(ctx context.Context, pod *api.PodSandb
 
 func (np *NetworkDriver) removePodSandbox(_ context.Context, pod *api.PodSandbox) error {
 	np.netdb.RemovePodNetNs(podKey(pod))
-	np.podConfigStore.DeletePod(types.UID(pod.GetUid()))
 	return nil
 }
 

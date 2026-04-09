@@ -20,10 +20,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sync"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	bolt "go.etcd.io/bbolt"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/dranet/pkg/apis"
@@ -88,8 +88,8 @@ func TestBoltCheckpointer_StoreAndGetOrCreate(t *testing.T) {
 	if len(data) != 1 {
 		t.Fatalf("expected 1 pod, got %d", len(data))
 	}
-	if !reflect.DeepEqual(data[podUID][deviceName], config) {
-		t.Errorf("got %+v, want %+v", data[podUID][deviceName], config)
+	if diff := cmp.Diff(config, data[podUID][deviceName]); diff != "" {
+		t.Errorf("Store()/GetOrCreate() mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -193,8 +193,8 @@ func TestPodConfigStore_Persistence(t *testing.T) {
 	if !found {
 		t.Fatalf("GetDeviceConfig() after reopen: not found")
 	}
-	if !reflect.DeepEqual(retrieved, config) {
-		t.Errorf("GetDeviceConfig() after reopen = %+v, want %+v", retrieved, config)
+	if diff := cmp.Diff(config, retrieved); diff != "" {
+		t.Errorf("GetDeviceConfig() after reopen mismatch (-want +got):\n%s", diff)
 	}
 
 	podConfig, found := store2.GetPodConfig("pod-1")
@@ -255,8 +255,8 @@ func TestPodConfigStore_ThreadSafetyWithBolt(t *testing.T) {
 			}
 			store.SetDeviceConfig(podUID, deviceName, config)
 			retrieved, _ := store.GetDeviceConfig(podUID, deviceName)
-			if !reflect.DeepEqual(retrieved, config) {
-				t.Errorf("goroutine %d: Get() = %+v, want %+v", i, retrieved, config)
+			if diff := cmp.Diff(config, retrieved); diff != "" {
+				t.Errorf("goroutine %d: Get() mismatch (-want +got):\n%s", i, diff)
 			}
 			if i%10 == 0 {
 				store.DeletePod(podUID)

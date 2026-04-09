@@ -123,6 +123,7 @@ func NewPodConfigStore(checkpointer Checkpointer) (*PodConfigStore, error) {
 			return nil, err
 		}
 		for podUID, devices := range saved {
+			klog.Infof("PodConfigStore: loaded checkpoint for pod %s (%d devices)", podUID, len(devices))
 			s.configs[podUID] = PodConfig{
 				DeviceConfigs: devices,
 			}
