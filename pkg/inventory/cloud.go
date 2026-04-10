@@ -27,6 +27,7 @@ import (
 	resourceapi "k8s.io/api/resource/v1"
 	"sigs.k8s.io/dranet/pkg/apis"
 	"sigs.k8s.io/dranet/pkg/cloudprovider"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/aws"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/azure"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/gce"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/oke"
@@ -36,6 +37,7 @@ type CloudProviderHint string
 
 const (
 	CloudProviderHintGCE   CloudProviderHint = "GCE"
+	CloudProviderHintAWS   CloudProviderHint = "AWS"
 	CloudProviderHintAzure CloudProviderHint = "AZURE"
 	CloudProviderHintOKE   CloudProviderHint = "OKE"
 	CloudProviderHintNone  CloudProviderHint = "NONE"
@@ -46,6 +48,7 @@ func discoverCloudProvider(ctx context.Context) CloudProviderHint {
 		CloudProviderHintGCE: func(ctx context.Context) bool {
 			return metadata.OnGCE()
 		},
+		CloudProviderHintAWS: aws.OnAWS,
 		CloudProviderHintAzure: azure.OnAzure,
 		CloudProviderHintOKE:   oke.OnOKE,
 	}
@@ -69,6 +72,7 @@ func getInstanceProperties(ctx context.Context, cloudProviderHint CloudProviderH
 
 	providers := map[CloudProviderHint]func(context.Context) (cloudprovider.CloudInstance, error){
 		CloudProviderHintGCE:   gce.GetInstance,
+		CloudProviderHintAWS:   aws.GetInstance,
 		CloudProviderHintAzure: azure.GetInstance,
 		CloudProviderHintOKE:   oke.GetInstance,
 	}
@@ -79,11 +83,6 @@ func getInstanceProperties(ctx context.Context, cloudProviderHint CloudProviderH
 		return nil
 	}
 	instance, err := provider(ctx)
-	if err != nil {
-		klog.Infof("could not get instance properties: %v", err)
-		return nil
-	}
-
 	if err != nil {
 		klog.Infof("could not get instance properties: %v", err)
 		return nil
