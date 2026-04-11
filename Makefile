@@ -97,7 +97,7 @@ image-push: ensure-buildx
 		--push
 
 helm-package:
-	@test -n "$(CHART_VERSION)" || (echo "ERROR: not on an exact git tag, cannot package helm chart"; exit 1)
+	@test -n "$(HELM_TAG)" || (echo "ERROR: not on an exact git tag, cannot package helm chart"; exit 1)
 	helm package deployments/helm/dranet \
 		--version "$(CHART_VERSION)" \
 		--app-version "$(HELM_TAG)" \
@@ -115,5 +115,12 @@ kind-image: image-build
 	kubectl delete -f install.yaml || true
 	kubectl apply -f install.yaml
 
-# The main release target, which pushes all images and helm charts
-release: ensure-helm image-push helm-push
+# The main release target, which pushes all images and helm charts.
+# Helm chart packaging and push is skipped when not on an exact git tag.
+release: image-push
+	@if [ -n "$(HELM_TAG)" ]; then \
+		echo "On tag $(HELM_TAG), packaging and pushing helm chart..."; \
+		$(MAKE) ensure-helm helm-push; \
+	else \
+		echo "Not on a tag, skipping helm chart push"; \
+	fi
