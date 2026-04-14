@@ -20,8 +20,8 @@ github.com/Mellanox/rdmamap v1.2.0 h1:RMqfZIwIWI/gCjFSDi2zZTlZZ3n0LFNwp2DIBAyT2X
 github.com/Mellanox/rdmamap v1.2.0/go.mod h1:j3WvTNr3OHINDyUtJtAFhqB0ZTG3n9ZN0dVgKcxBUlM=
 github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYWrPrQ=
 github.com/antlr4-go/antlr/v4 v4.13.1/go.mod h1:GKmUxMtwp6ZgGwZSva4eWPC5mS6vUAmOABFgjdkM7Nw=
-github.com/aws-neuron/connected-device-maps-over-efa-for-neuron v1.0.0 h1:r7BYJsP9gH4JSQ1fgO0sCSDjAogcniSOfDCY8B0kXOQ=
-github.com/aws-neuron/connected-device-maps-over-efa-for-neuron v1.0.0/go.mod h1:+d5FjNMs3+YAE+G2MVpdBgBSBnRUyNDzOL3HLeMCgf0=
+github.com/aws-neuron/connected-device-maps-over-efa-for-neuron v1.1.0 h1:f+x3rjTUNXb6gp1iOzGSQxXg2W1SKrO59ecqRumf0+0=
+github.com/aws-neuron/connected-device-maps-over-efa-for-neuron v1.1.0/go.mod h1:+d5FjNMs3+YAE+G2MVpdBgBSBnRUyNDzOL3HLeMCgf0=
 github.com/aws/aws-sdk-go-v2 v1.41.4 h1:10f50G7WyU02T56ox1wWXq+zTX9I1zxG46HYuG1hH/k=
 github.com/aws/aws-sdk-go-v2 v1.41.4/go.mod h1:mwsPRE8ceUUpiTgF7QmQIJ7lgsKUPQOUl3o72QBrE1o=
 github.com/aws/aws-sdk-go-v2/config v1.32.12 h1:O3csC7HUGn2895eNrLytOJQdoL2xyJy0iYXhoZ1OmP0=
