@@ -1,7 +1,7 @@
 [build]
   base = "site"
   publish = "public"
-  command = "hugo --gc --minify -b $URL"
+  command = "npm init --yes && npm install --save-dev autoprefixer postcss-cli && hugo --gc --minify -b $URL"
 
 [build.environment]
   GO_VERSION = "1.23.4"
