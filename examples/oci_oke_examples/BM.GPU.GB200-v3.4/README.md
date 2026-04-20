@@ -1,4 +1,4 @@
-# OKE BM.GPU.GB200-v3.4 RoCEv2 dranet Demo
+# OKE BM.GPU.GB200-v3.4 RoCEv2 DRANET Demo
 
 End-to-end demo of topologically-aware GPU + RoCEv2 NIC allocation using
 [Dynamic Resource Allocation (DRA)](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
@@ -74,7 +74,7 @@ OCI Instance Metadata Service (`GET /opc/v2/host/`):
 | `oke.dra.net/rackId` | Physical rack identifier |
 | `oke.dra.net/gpuMemoryFabricId` | GPU memory fabric ID (populated on GB200/GB300) |
 
-> **Note:** Topology data must be enabled for your OCI tenancy. dranet logs
+> **Note:** Topology data must be enabled for your OCI tenancy. DRANET logs
 > `"Please turn on TopologyData for your Tenancy"` at startup if the `/host/`
 > endpoint does not provide `rdmaTopologyData`.
 
@@ -90,8 +90,8 @@ sets `net.ipv6.conf.all.disable_ipv6=1` in pod namespaces. This prevents the
 RA-assigned IPv6 address from being applied to RDMA NICs in the pod, leaving
 only link-local GIDs (which are not routable on the OKE fabric).
 
-**dranet fix:** The OKE cloud provider returns `EnableIPv6: true` for RDMA
-devices on GPU fabric shapes. When set, dranet:
+**DRANET fix:** The OKE cloud provider returns `EnableIPv6: true` for RDMA
+devices on GPU fabric shapes. When set, DRANET:
 
 1. Soft-fails the initial IPv6 address application (EACCES due to disabled IPv6)
 2. Enables IPv6 per-interface via `net.ipv6.conf.<ifname>.disable_ipv6=0`
@@ -99,7 +99,7 @@ devices on GPU fabric shapes. When set, dranet:
 
 **NCCL configuration note:** Set `NCCL_IB_DATA_DIRECT=0` to prevent NCCL from
 selecting the Data Direct DMA interface (`mlx5_N_dma`) and instead use the
-standard IB verbs path, which correctly uses the GID configured by dranet.
+standard IB verbs path, which correctly uses the GID configured by DRANET.
 
 ## Files
 
@@ -115,14 +115,14 @@ standard IB verbs path, which correctly uses the GID configured by dranet.
 
 ## Installation
 
-### 1. Uninstall the existing dranet
+### 1. Uninstall the existing DRANET
 
 ```bash
 helm uninstall dranet -n kube-system
 kubectl wait --for=delete pod -l k8s-app=dranet -n kube-system --timeout=120s
 ```
 
-### 2. Install your local dranet build
+### 2. Install your local DRANET build
 
 Build and push your image, then install from the local Helm chart:
 
@@ -230,9 +230,9 @@ kubectl delete mpijob nccl-test-dra
 
 ## Recovering orphaned RDMA NICs
 
-When a pod is deleted, dranet may not return the RDMA NIC from the pod namespace
+When a pod is deleted, DRANET may not return the RDMA NIC from the pod namespace
 to the host namespace. The NIC disappears from both the host and the ResourceSlice.
-This is a known dranet bug (tracked for fix in cri-o).
+This is a known DRANET bug (tracked for fix in cri-o).
 
 **Symptoms:** Workers stuck in `Pending` with `cannot allocate all claims`.
 
@@ -278,7 +278,7 @@ Common PCI addresses on BM.GPU.GB200-v3.4:
 | rdma6 | 0012:03:00.0 | 1 |
 | rdma7 | 0012:03:00.1 | 1 |
 
-Wait ~15 seconds for dranet to rescan, then verify the NIC reappears in the ResourceSlice.
+Wait ~15 seconds for DRANET to rescan, then verify the NIC reappears in the ResourceSlice.
 
 ## Benchmark Results
 
@@ -352,7 +352,7 @@ idiomatic DRA approach for multi-device allocation from a homogeneous pool.
 
 **~92–96% of theoretical at 2 nodes:**
 Peak single-NIC bandwidth is 400 Gb/s = 50 GB/s. The 1nic-aligned result
-(~46 GB/s) achieves ~92% of theoretical, demonstrating that dranet's DRA-based
+(~46 GB/s) achieves ~92% of theoretical, demonstrating that DRANET's DRA-based
 NIC injection and IPv6 GID configuration adds negligible overhead.
 
 **Channel × QPS equivalence at 16 nodes (1-GPU mode):**
@@ -371,5 +371,5 @@ at 16 nodes, approaching line rate at full-rack scale.
 **Isolation confirmed:**
 In all cases, the pod sees only the allocated `/dev/infiniband/uverbs*` and
 `/dev/infiniband/umad*` devices — without `privileged: true`. Isolation is
-enforced by the dranet NRI plugin injecting only the char devices that correspond
+enforced by the DRANET NRI plugin injecting only the char devices that correspond
 to the DRA-allocated NIC(s).
