@@ -1,4 +1,4 @@
-# OKE BM.GPU.H100.8 RoCEv2 dranet Demo
+# OKE BM.GPU.H100.8 RoCEv2 DRANET Demo
 
 End-to-end demo of topology-aware GPU + RoCEv2 NIC allocation using
 [Dynamic Resource Allocation (DRA)](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
@@ -65,36 +65,25 @@ OCI Instance Metadata Service (`GET /opc/v2/host/`):
 
 | File | Description |
 |---|---|
-| `deviceclass.yaml` | `DeviceClass` for dranet NIC devices |
+| `deviceclass.yaml` | `DeviceClass` for DRANET NIC devices |
 | `resource-claim-template.yaml` | `ResourceClaimTemplate` for 1 GPU + 1 RDMA NIC |
 | `mpi-job.yaml` | `MPIJob` that runs `nccl_tests/all_reduce_perf` across 2 workers |
 
-## Installation
+## Usage
 
-### 1. Install dranet
-
-```bash
-helm install dranet ./deployments/helm/dranet \
-  --namespace kube-system \
-  --set image.repository=<your-registry>/dranet \
-  --set image.tag=<your-tag> \
-  --set image.pullPolicy=Always
-kubectl rollout status daemonset/dranet -n kube-system
-```
-
-### 2. Create the DeviceClass
+### Create the DeviceClass
 
 The `dra.net` DeviceClass is required for DRA to match NIC ResourceClaims
-against dranet's ResourceSlice devices.
+against DRANET's ResourceSlice devices.
 
 ```bash
 kubectl apply -f deviceclass.yaml
 ```
 
-### 3. Verify devices
+### Verify devices
 
 ```bash
-# Verify dranet ResourceSlices are published
+# Verify DRANET ResourceSlices are published
 kubectl get resourceslice -l driver=dra.net
 
 # Verify GPU ResourceSlices (from NVIDIA DRA driver)
@@ -119,7 +108,7 @@ for rs in data['items']:
 "
 ```
 
-## Usage
+### Setup MPI and run
 
 ```bash
 # Install MPI Operator (if not already installed)
@@ -144,7 +133,7 @@ kubectl logs -f "${launcher}"
 
 ## Recovering orphaned RDMA NICs
 
-When a pod is deleted, dranet may not return the RDMA NIC from the pod namespace
+When a pod is deleted, DRANET may not return the RDMA NIC from the pod namespace
 to the host namespace (see [#137](https://github.com/kubernetes-sigs/dranet/issues/137)).
 
 **Symptoms:** Workers stuck in `Pending` with `cannot allocate all claims`.
@@ -160,5 +149,5 @@ sleep 2
 echo "0000:0c:00.0" > /sys/bus/pci/drivers/mlx5_core/bind
 ```
 
-Wait ~15 seconds for dranet to rescan, then verify the NIC reappears in the
+Wait ~15 seconds for DRANET to rescan, then verify the NIC reappears in the
 ResourceSlice.
