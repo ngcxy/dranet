@@ -113,27 +113,6 @@ standard IB verbs path, which correctly uses the GID configured by DRANET.
 | `resourceslice-dranet.yaml` | Live NIC `ResourceSlice` from a GB200 node (reference) |
 | `placement-group/` | OKE topology-aware scheduling examples |
 
-## Installation
-
-### 1. Uninstall the existing DRANET
-
-```bash
-helm uninstall dranet -n kube-system
-kubectl wait --for=delete pod -l k8s-app=dranet -n kube-system --timeout=120s
-```
-
-### 2. Install your local DRANET build
-
-Build and push your image, then install from the local Helm chart:
-
-```bash
-helm install dranet ./deployments/helm/dranet \
-  --namespace kube-system \
-  --set image.repository=<your-registry>/dranet \
-  --set image.tag=<your-tag> \
-  --set image.pullPolicy=Always
-kubectl rollout status daemonset/dranet -n kube-system
-```
 
 ## Usage
 
@@ -232,7 +211,7 @@ kubectl delete mpijob nccl-test-dra
 
 When a pod is deleted, DRANET may not return the RDMA NIC from the pod namespace
 to the host namespace. The NIC disappears from both the host and the ResourceSlice.
-This is a known DRANET bug (tracked for fix in cri-o).
+This is a known DRANET bug. [This issue](https://github.com/kubernetes-sigs/dranet/issues/137) tracks the DRANET progress, while [this PR](https://github.com/containerd/nri/pull/286) addresses the upstream NRI changes.
 
 **Symptoms:** Workers stuck in `Pending` with `cannot allocate all claims`.
 

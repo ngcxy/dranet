@@ -69,20 +69,9 @@ OCI Instance Metadata Service (`GET /opc/v2/host/`):
 | `resource-claim-template.yaml` | `ResourceClaimTemplate` for 1 GPU + 1 RDMA NIC |
 | `mpi-job.yaml` | `MPIJob` that runs `nccl_tests/all_reduce_perf` across 2 workers |
 
-## Installation
+## Usage
 
-### 1. Install DRANET
-
-```bash
-helm install dranet ./deployments/helm/dranet \
-  --namespace kube-system \
-  --set image.repository=<your-registry>/dranet \
-  --set image.tag=<your-tag> \
-  --set image.pullPolicy=Always
-kubectl rollout status daemonset/dranet -n kube-system
-```
-
-### 2. Create the DeviceClass
+### Create the DeviceClass
 
 The `dra.net` DeviceClass is required for DRA to match NIC ResourceClaims
 against DRANET's ResourceSlice devices.
@@ -91,7 +80,7 @@ against DRANET's ResourceSlice devices.
 kubectl apply -f deviceclass.yaml
 ```
 
-### 3. Verify devices
+### Verify devices
 
 ```bash
 # Verify DRANET ResourceSlices are published
@@ -119,7 +108,7 @@ for rs in data['items']:
 "
 ```
 
-## Usage
+### Setup MPI and run
 
 ```bash
 # Install MPI Operator (if not already installed)
