@@ -1,6 +1,6 @@
 # OKE GB200 Placement Group / Topology-Aware Scheduling
 
-Demonstrates how dranet exposes OCI RDMA topology information as DRA device
+Demonstrates how DRANET exposes OCI RDMA topology information as DRA device
 attributes, enabling workloads to constrain scheduling to nodes that share a
 common fabric domain.
 
@@ -17,7 +17,7 @@ scheduled across fabric boundaries.
 
 ## Solution
 
-dranet queries the OCI Instance Metadata Service (IMDS) at
+DRANET queries the OCI Instance Metadata Service (IMDS) at
 `/opc/v2/host/` and attaches the following attributes to every RDMA device
 in the node's ResourceSlice:
 
