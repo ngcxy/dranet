@@ -5,7 +5,7 @@ go 1.25.6
 require (
 	cloud.google.com/go/compute v1.60.0
 	cloud.google.com/go/compute/metadata v0.9.0
-	cloud.google.com/go/container v1.47.0
+	cloud.google.com/go/container v1.49.0
 	dario.cat/mergo v1.0.2
 	github.com/Mellanox/rdmamap v1.2.0
 	github.com/aws-neuron/connected-device-maps-over-efa-for-neuron v1.1.0
@@ -18,7 +18,7 @@ require (
 	github.com/insomniacslk/dhcp v0.0.0-20250417080101-5f8cf70e8c5f
 	github.com/jaypipes/ghw v0.24.0
 	github.com/mdlayher/genetlink v1.4.0
-	github.com/mdlayher/netlink v1.11.0
+	github.com/mdlayher/netlink v1.11.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
