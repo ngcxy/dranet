@@ -259,15 +259,6 @@ func TestGetExcludedUplinkInterfaces(t *testing.T) {
 	userns.Run(t, testGetExcludedUplinkInterfaces_Namespaced, syscall.CLONE_NEWNET)
 }
 
-// testGetExcludedUplinkInterfaces_Namespaced exercises getExcludedUplinkInterfaces
-// across the scenarios called out in UPLINK_CHILD_FILTERING_PLAN.md. Each
-// scenario creates a fresh topology inside the test-local netns and verifies
-// both the default-route uplink and any descendants are excluded.
-//
-// Bridges are used in place of the real Azure synthetic uplink because
-// netlink's MasterIndex relationship is what the helper keys on, and a bridge
-// master / dummy slave is the simplest way to reproduce that relationship
-// inside a netns test.
 func testGetExcludedUplinkInterfaces_Namespaced(t *testing.T) {
 	if err := netlink.LinkSetUp(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "lo"}}); err != nil {
 		t.Fatalf("failed to bring lo up: %v", err)
