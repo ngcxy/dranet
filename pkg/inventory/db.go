@@ -190,8 +190,8 @@ func (db *DB) Run(ctx context.Context) error {
 		db.cloudProviderHint = discoverCloudProvider(ctx)
 	}
 	db.instance = getInstanceProperties(ctx, db.cloudProviderHint)
-	db.gwInterfaces = getDefaultGwInterfaces()
-	klog.V(2).Infof("Default gateway interfaces: %v", db.gwInterfaces.UnsortedList())
+	db.gwInterfaces = getExcludedUplinkInterfaces()
+	klog.V(2).Infof("Excluded uplink interfaces and children: %v", db.gwInterfaces.UnsortedList())
 
 	for {
 		err := db.rateLimiter.Wait(ctx)
@@ -233,7 +233,7 @@ func (db *DB) scan() []resourceapi.Device {
 	for _, device := range devices {
 		ifName := device.Attributes[apis.AttrInterfaceName].StringValue
 		if ifName != nil && db.gwInterfaces.Has(string(*ifName)) {
-			klog.V(4).Infof("Ignoring interface %s from discovery since it is an uplink interface", *ifName)
+			klog.V(4).Infof("Ignoring interface %s from discovery since it is an uplink interface or a child of one", *ifName)
 			continue
 		}
 		filteredDevices = append(filteredDevices, device)

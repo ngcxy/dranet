@@ -115,6 +115,62 @@ func getDefaultGwInterfaces() sets.Set[string] {
 	return interfaces
 }
 
+// getExcludedUplinkInterfaces returns the set of interface names that must be
+// excluded from the inventory: the active default-gateway uplinks plus every
+// netdev that is a descendant of one of those uplinks in the link hierarchy.
+func getExcludedUplinkInterfaces() sets.Set[string] {
+	excluded := getDefaultGwInterfaces()
+
+	links, err := nlwrap.LinkList()
+	if err != nil {
+		klog.Errorf("Failed to list links for uplink child exclusion: %v", err)
+		return excluded
+	}
+
+	// Index links by their interface index so we can resolve MasterIndex
+	// lookups in O(1) and walk the hierarchy without re-querying netlink.
+	linksByIndex := make(map[int]netlink.Link, len(links))
+	nameByIndex := make(map[int]string, len(links))
+	for _, l := range links {
+		idx := l.Attrs().Index
+		linksByIndex[idx] = l
+		nameByIndex[idx] = l.Attrs().Name
+	}
+
+	excludedIndices := sets.New[int]()
+	for idx, name := range nameByIndex {
+		if excluded.Has(name) {
+			excludedIndices.Insert(idx)
+		}
+	}
+
+	// Expand the excluded set by repeatedly walking the link list and adding
+	// any link whose master is already excluded. Stop once a full pass adds
+	// nothing new (handles nested hierarchies like vf -> vf-child -> uplink).
+	for {
+		added := false
+		for _, l := range links {
+			attrs := l.Attrs()
+			if excluded.Has(attrs.Name) {
+				continue
+			}
+			if attrs.MasterIndex == 0 {
+				continue
+			}
+			if excludedIndices.Has(attrs.MasterIndex) {
+				excluded.Insert(attrs.Name)
+				excludedIndices.Insert(attrs.Index)
+				added = true
+			}
+		}
+		if !added {
+			break
+		}
+	}
+
+	return excluded
+}
+
 func getTcFilters(link netlink.Link) ([]string, bool) {
 	isTcEBPF := false
 	filterNames := sets.Set[string]{}

@@ -254,3 +254,180 @@ func testGetDefaultGwInterfaces_Namespaced(t *testing.T) {
 		})
 	}
 }
+
+func TestGetExcludedUplinkInterfaces(t *testing.T) {
+	userns.Run(t, testGetExcludedUplinkInterfaces_Namespaced, syscall.CLONE_NEWNET)
+}
+
+// testGetExcludedUplinkInterfaces_Namespaced exercises getExcludedUplinkInterfaces
+// across the scenarios called out in UPLINK_CHILD_FILTERING_PLAN.md. Each
+// scenario creates a fresh topology inside the test-local netns and verifies
+// both the default-route uplink and any descendants are excluded.
+//
+// Bridges are used in place of the real Azure synthetic uplink because
+// netlink's MasterIndex relationship is what the helper keys on, and a bridge
+// master / dummy slave is the simplest way to reproduce that relationship
+// inside a netns test.
+func testGetExcludedUplinkInterfaces_Namespaced(t *testing.T) {
+	if err := netlink.LinkSetUp(&netlink.Device{LinkAttrs: netlink.LinkAttrs{Name: "lo"}}); err != nil {
+		t.Fatalf("failed to bring lo up: %v", err)
+	}
+
+	_, defaultIPv4, _ := net.ParseCIDR("0.0.0.0/0")
+	gwIPv4 := net.ParseIP("192.168.1.1")
+	bridgeAddr, _ := netlink.ParseAddr("192.168.1.2/24")
+
+	tests := []struct {
+		name           string
+		setup          func(t *testing.T)
+		expectedResult sets.Set[string]
+	}{
+		{
+			name: "Default-route uplink only",
+			setup: func(t *testing.T) {
+				addBridgeUplink(t, "br0", bridgeAddr, defaultIPv4, gwIPv4)
+			},
+			expectedResult: sets.New[string]("br0"),
+		},
+		{
+			name: "Uplink with one child VF",
+			setup: func(t *testing.T) {
+				br := addBridgeUplink(t, "br0", bridgeAddr, defaultIPv4, gwIPv4)
+				addChildDummy(t, "vf0", br.Attrs().Index)
+			},
+			expectedResult: sets.New[string]("br0", "vf0"),
+		},
+		{
+			name: "Recursive child relationship",
+			setup: func(t *testing.T) {
+				br := addBridgeUplink(t, "br0", bridgeAddr, defaultIPv4, gwIPv4)
+				// bond attached to the uplink bridge, then a dummy attached
+				// to the bond. This reproduces the vf -> vf-child -> uplink
+				// chain described in the plan. A bond is used as the
+				// intermediate link because the kernel rejects bridge-in-
+				// bridge nesting (ELOOP).
+				vf0 := addChildBond(t, "vf0", br.Attrs().Index)
+				addChildDummy(t, "vf0child", vf0.Attrs().Index)
+			},
+			expectedResult: sets.New[string]("br0", "vf0", "vf0child"),
+		},
+		{
+			name: "Unrelated secondary NIC is not excluded",
+			setup: func(t *testing.T) {
+				addBridgeUplink(t, "br0", bridgeAddr, defaultIPv4, gwIPv4)
+				// Standalone dummy with no master - must remain allocatable.
+				eth1 := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: "eth1"}}
+				if err := netlink.LinkAdd(eth1); err != nil {
+					t.Fatalf("failed to add eth1: %v", err)
+				}
+				if err := netlink.LinkSetUp(eth1); err != nil {
+					t.Fatalf("failed to set eth1 up: %v", err)
+				}
+			},
+			expectedResult: sets.New[string]("br0"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Flush the main routing table and tear down any links from the
+			// previous subtest so each scenario starts from a clean netns.
+			routes, _ := netlink.RouteListFiltered(netlink.FAMILY_ALL, &netlink.Route{Table: unix.RT_TABLE_MAIN}, netlink.RT_FILTER_TABLE)
+			for _, r := range routes {
+				if r.Dst == nil || r.Dst.IP.IsUnspecified() {
+					netlink.RouteDel(&r)
+				}
+			}
+			links, _ := netlink.LinkList()
+			for _, l := range links {
+				if l.Attrs().Name == "lo" {
+					continue
+				}
+				_ = netlink.LinkDel(l)
+			}
+
+			tt.setup(t)
+
+			got := getExcludedUplinkInterfaces()
+			if diff := cmp.Diff(tt.expectedResult, got); diff != "" {
+				t.Errorf("getExcludedUplinkInterfaces() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// addBridgeUplink creates a bridge, assigns it an address, brings it up, and
+// installs an IPv4 default route through it so it looks like the active
+// default-gateway uplink.
+func addBridgeUplink(t *testing.T, name string, addr *netlink.Addr, defaultDst *net.IPNet, gw net.IP) netlink.Link {
+	t.Helper()
+	br := &netlink.Bridge{LinkAttrs: netlink.LinkAttrs{Name: name}}
+	if err := netlink.LinkAdd(br); err != nil {
+		t.Fatalf("failed to add bridge %s: %v", name, err)
+	}
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		t.Fatalf("failed to look up bridge %s: %v", name, err)
+	}
+	if err := netlink.AddrAdd(link, addr); err != nil {
+		t.Fatalf("failed to add address to %s: %v", name, err)
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		t.Fatalf("failed to set %s up: %v", name, err)
+	}
+	if err := netlink.RouteAdd(&netlink.Route{
+		Family:    netlink.FAMILY_V4,
+		Dst:       defaultDst,
+		Gw:        gw,
+		LinkIndex: link.Attrs().Index,
+		Priority:  100,
+		Table:     unix.RT_TABLE_MAIN,
+	}); err != nil {
+		t.Fatalf("failed to install default route via %s: %v", name, err)
+	}
+	return link
+}
+
+// addChildDummy creates a dummy interface and attaches it to the link at
+// masterIndex so it shows up with MasterIndex == masterIndex.
+func addChildDummy(t *testing.T, name string, masterIndex int) netlink.Link {
+	t.Helper()
+	dummy := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: name}}
+	if err := netlink.LinkAdd(dummy); err != nil {
+		t.Fatalf("failed to add dummy %s: %v", name, err)
+	}
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		t.Fatalf("failed to look up dummy %s: %v", name, err)
+	}
+	if err := netlink.LinkSetMasterByIndex(link, masterIndex); err != nil {
+		t.Fatalf("failed to attach %s to index %d: %v", name, masterIndex, err)
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		t.Fatalf("failed to set %s up: %v", name, err)
+	}
+	return link
+}
+
+// addChildBond creates a bond attached to masterIndex so it can itself act
+// as a parent for a further descendant link. A bond is used here (rather
+// than a bridge) because the kernel refuses to nest a bridge inside another
+// bridge (ELOOP), but a bond can be enrolled as a bridge port.
+func addChildBond(t *testing.T, name string, masterIndex int) netlink.Link {
+	t.Helper()
+	bond := netlink.NewLinkBond(netlink.LinkAttrs{Name: name})
+	if err := netlink.LinkAdd(bond); err != nil {
+		t.Fatalf("failed to add bond %s: %v", name, err)
+	}
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		t.Fatalf("failed to look up bond %s: %v", name, err)
+	}
+	if err := netlink.LinkSetMasterByIndex(link, masterIndex); err != nil {
+		t.Fatalf("failed to attach bond %s to index %d: %v", name, masterIndex, err)
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		t.Fatalf("failed to set %s up: %v", name, err)
+	}
+	return link
+}
