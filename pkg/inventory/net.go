@@ -127,44 +127,34 @@ func getExcludedUplinkInterfaces() sets.Set[string] {
 		return excluded
 	}
 
-	// Index links by their interface index so we can resolve MasterIndex
-	// lookups in O(1) and walk the hierarchy without re-querying netlink.
-	linksByIndex := make(map[int]netlink.Link, len(links))
-	nameByIndex := make(map[int]string, len(links))
+	// Build a parent-index -> children adjacency map in a single pass so we
+	// can cull whole families in one mutating walk instead of re-scanning the
+	// link list per level of nesting.
+	childrenOf := make(map[int][]netlink.Link)
+	var seeds []int
 	for _, l := range links {
-		idx := l.Attrs().Index
-		linksByIndex[idx] = l
-		nameByIndex[idx] = l.Attrs().Name
-	}
-
-	excludedIndices := sets.New[int]()
-	for idx, name := range nameByIndex {
-		if excluded.Has(name) {
-			excludedIndices.Insert(idx)
+		attrs := l.Attrs()
+		if attrs.MasterIndex != 0 {
+			childrenOf[attrs.MasterIndex] = append(childrenOf[attrs.MasterIndex], l)
+		}
+		if excluded.Has(attrs.Name) {
+			seeds = append(seeds, attrs.Index)
 		}
 	}
 
-	// Expand the excluded set by repeatedly walking the link list and adding
-	// any link whose master is already excluded. Stop once a full pass adds
-	// nothing new (handles nested hierarchies like vf -> vf-child -> uplink).
-	for {
-		added := false
-		for _, l := range links {
-			attrs := l.Attrs()
-			if excluded.Has(attrs.Name) {
-				continue
-			}
-			if attrs.MasterIndex == 0 {
-				continue
-			}
-			if excludedIndices.Has(attrs.MasterIndex) {
-				excluded.Insert(attrs.Name)
-				excludedIndices.Insert(attrs.Index)
-				added = true
-			}
+	// BFS from each excluded uplink through the adjacency map. Deleting the
+	// entry after visiting guarantees each child is processed at most once
+	// even if the hierarchy is deep (vf -> vf-child -> uplink).
+	for i := 0; i < len(seeds); i++ {
+		children, found := childrenOf[seeds[i]]
+		if !found {
+			continue
 		}
-		if !added {
-			break
+		delete(childrenOf, seeds[i])
+		for _, child := range children {
+			attrs := child.Attrs()
+			excluded.Insert(attrs.Name)
+			seeds = append(seeds, attrs.Index)
 		}
 	}
 
