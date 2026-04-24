@@ -117,7 +117,14 @@ func getDefaultGwInterfaces() sets.Set[string] {
 
 // getExcludedUplinkInterfaces returns the set of interface names that must be
 // excluded from the inventory: the active default-gateway uplinks plus every
-// netdev that is a descendant of one of those uplinks in the link hierarchy.
+// netdev that is a descendant of one of those uplinks. A child tied to a
+// parent through MasterIndex (bond/team slave, bridge port, VF enslaved to
+// its PF, ...) shares its forwarding state with that parent, so moving just
+// the child into a pod netns strands it from the parent that owns that
+// state; when the parent is the host's default-gw uplink this also degrades
+// host connectivity. There is no scenario where relocating only the child of
+// a default-gw uplink is correct, so the entire MasterIndex-linked subtree
+// rooted at each uplink should be excluded.
 func getExcludedUplinkInterfaces() sets.Set[string] {
 	excluded := getDefaultGwInterfaces()
 
