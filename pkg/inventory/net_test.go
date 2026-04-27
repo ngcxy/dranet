@@ -317,6 +317,30 @@ func testGetExcludedUplinkInterfaces_Namespaced(t *testing.T) {
 			},
 			expectedResult: sets.New[string]("br0"),
 		},
+		{
+			// macvlan links to its lower device through ParentIndex, not
+			// MasterIndex. It carries its own forwarding state and can be
+			// relocated into a pod netns without stranding the host uplink,
+			// so the exclusion walk (which follows MasterIndex) must leave
+			// it allocatable even when the parent is the default-gw uplink.
+			name: "Macvlan child of uplink stays allocatable",
+			setup: func(t *testing.T) {
+				uplink := addDummyUplink(t, "eth0", bridgeAddr, defaultIPv4, gwIPv4)
+				addMacvlanChild(t, "mv0", uplink.Attrs().Index)
+			},
+			expectedResult: sets.New[string]("eth0"),
+		},
+		{
+			// Same reasoning as the macvlan case. ipvlan is split into its
+			// own subtest because the kernel refuses to host both a macvlan
+			// and an ipvlan on the same lower device simultaneously.
+			name: "IPVlan child of uplink stays allocatable",
+			setup: func(t *testing.T) {
+				uplink := addDummyUplink(t, "eth0", bridgeAddr, defaultIPv4, gwIPv4)
+				addIPVlanChild(t, "iv0", uplink.Attrs().Index)
+			},
+			expectedResult: sets.New[string]("eth0"),
+		},
 	}
 
 	for _, tt := range tests {
@@ -375,6 +399,82 @@ func addBridgeUplink(t *testing.T, name string, addr *netlink.Addr, defaultDst *
 		Table:     unix.RT_TABLE_MAIN,
 	}); err != nil {
 		t.Fatalf("failed to install default route via %s: %v", name, err)
+	}
+	return link
+}
+
+// addDummyUplink creates a dummy interface, assigns it an address, brings it
+// up, and installs an IPv4 default route through it so it looks like the
+// active default-gateway uplink. Used when we need a parent that can host
+// macvlan/ipvlan children (which attach via ParentIndex, not MasterIndex).
+func addDummyUplink(t *testing.T, name string, addr *netlink.Addr, defaultDst *net.IPNet, gw net.IP) netlink.Link {
+	t.Helper()
+	dummy := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: name}}
+	if err := netlink.LinkAdd(dummy); err != nil {
+		t.Fatalf("failed to add dummy uplink %s: %v", name, err)
+	}
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		t.Fatalf("failed to look up dummy uplink %s: %v", name, err)
+	}
+	if err := netlink.AddrAdd(link, addr); err != nil {
+		t.Fatalf("failed to add address to %s: %v", name, err)
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		t.Fatalf("failed to set %s up: %v", name, err)
+	}
+	if err := netlink.RouteAdd(&netlink.Route{
+		Family:    netlink.FAMILY_V4,
+		Dst:       defaultDst,
+		Gw:        gw,
+		LinkIndex: link.Attrs().Index,
+		Priority:  100,
+		Table:     unix.RT_TABLE_MAIN,
+	}); err != nil {
+		t.Fatalf("failed to install default route via %s: %v", name, err)
+	}
+	return link
+}
+
+// addMacvlanChild creates a macvlan attached to parentIndex via ParentIndex.
+// MasterIndex stays zero, which is the distinction the exclusion walk relies
+// on to leave these children in the inventory.
+func addMacvlanChild(t *testing.T, name string, parentIndex int) netlink.Link {
+	t.Helper()
+	mv := &netlink.Macvlan{
+		LinkAttrs: netlink.LinkAttrs{Name: name, ParentIndex: parentIndex},
+		Mode:      netlink.MACVLAN_MODE_BRIDGE,
+	}
+	if err := netlink.LinkAdd(mv); err != nil {
+		t.Fatalf("failed to add macvlan %s: %v", name, err)
+	}
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		t.Fatalf("failed to look up macvlan %s: %v", name, err)
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		t.Fatalf("failed to set %s up: %v", name, err)
+	}
+	return link
+}
+
+// addIPVlanChild creates an ipvlan attached to parentIndex via ParentIndex,
+// with MasterIndex left at zero for the same reason as addMacvlanChild.
+func addIPVlanChild(t *testing.T, name string, parentIndex int) netlink.Link {
+	t.Helper()
+	iv := &netlink.IPVlan{
+		LinkAttrs: netlink.LinkAttrs{Name: name, ParentIndex: parentIndex},
+		Mode:      netlink.IPVLAN_MODE_L2,
+	}
+	if err := netlink.LinkAdd(iv); err != nil {
+		t.Fatalf("failed to add ipvlan %s: %v", name, err)
+	}
+	link, err := netlink.LinkByName(name)
+	if err != nil {
+		t.Fatalf("failed to look up ipvlan %s: %v", name, err)
+	}
+	if err := netlink.LinkSetUp(link); err != nil {
+		t.Fatalf("failed to set %s up: %v", name, err)
 	}
 	return link
 }
