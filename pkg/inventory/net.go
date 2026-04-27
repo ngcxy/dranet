@@ -115,6 +115,59 @@ func getDefaultGwInterfaces() sets.Set[string] {
 	return interfaces
 }
 
+// getExcludedUplinkInterfaces returns the set of interface names that must be
+// excluded from the inventory: the active default-gateway uplinks plus every
+// netdev that is a descendant of one of those uplinks. A child tied to a
+// parent through MasterIndex (bond/team slave, bridge port, VF enslaved to
+// its PF, ...) shares its forwarding state with that parent, so moving just
+// the child into a pod netns strands it from the parent that owns that
+// state; when the parent is the host's default-gw uplink this also degrades
+// host connectivity. There is no scenario where relocating only the child of
+// a default-gw uplink is correct, so the entire MasterIndex-linked subtree
+// rooted at each uplink should be excluded.
+func getExcludedUplinkInterfaces() sets.Set[string] {
+	excluded := getDefaultGwInterfaces()
+
+	links, err := nlwrap.LinkList()
+	if err != nil {
+		klog.Errorf("Failed to list links for uplink child exclusion: %v", err)
+		return excluded
+	}
+
+	// Build a parent-index -> children adjacency map in a single pass so we
+	// can cull whole families in one mutating walk instead of re-scanning the
+	// link list per level of nesting.
+	childrenOf := make(map[int][]netlink.Link)
+	var seeds []int
+	for _, l := range links {
+		attrs := l.Attrs()
+		if attrs.MasterIndex != 0 {
+			childrenOf[attrs.MasterIndex] = append(childrenOf[attrs.MasterIndex], l)
+		}
+		if excluded.Has(attrs.Name) {
+			seeds = append(seeds, attrs.Index)
+		}
+	}
+
+	// BFS from each excluded uplink through the adjacency map. Deleting the
+	// entry after visiting guarantees each child is processed at most once
+	// even if the hierarchy is deep (vf -> vf-child -> uplink).
+	for i := 0; i < len(seeds); i++ {
+		children, found := childrenOf[seeds[i]]
+		if !found {
+			continue
+		}
+		delete(childrenOf, seeds[i])
+		for _, child := range children {
+			attrs := child.Attrs()
+			excluded.Insert(attrs.Name)
+			seeds = append(seeds, attrs.Index)
+		}
+	}
+
+	return excluded
+}
+
 func getTcFilters(link netlink.Link) ([]string, bool) {
 	isTcEBPF := false
 	filterNames := sets.Set[string]{}
