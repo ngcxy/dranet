@@ -179,14 +179,17 @@ setup_tcx_filter() {
 }
 
 @test "test metric server is up and operating on host" {
-  output=$(kubectl \
-    run -i test-metrics \
+  # Run a temporary pod to access metrics
+  kubectl run test-metrics \
     --image registry.k8s.io/e2e-test-images/agnhost:2.54 \
     --overrides='{"spec": {"hostNetwork": true}}' \
     --restart=Never \
     --command \
-    -- sh -c "curl --silent localhost:9177/metrics | grep process_start_time_seconds >/dev/null && echo ok || echo fail")
-  assert_equal "$output" "ok"
+    -- sh -c "curl --silent localhost:9177/metrics | grep process_start_time_seconds >/dev/null && echo ok || echo fail"
+
+  # Wait for completion and verify output
+  kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/test-metrics --timeout=5s
+  assert_equal "$(kubectl logs test-metrics)" "ok"
 }
 
 
