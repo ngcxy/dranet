@@ -19,6 +19,9 @@ on:
     # Runs daily at 03:00 UTC
     - cron: '0 3 * * *'
 
+permissions:
+  contents: read
+
 jobs:
   bats_tests:
     runs-on: ubuntu-22.04

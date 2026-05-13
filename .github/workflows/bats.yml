@@ -17,6 +17,9 @@ env:
   IMAGE_NAME: registry.k8s.io/networking/dranet
   KIND_CLUSTER_NAME: kind
 
+permissions:
+  contents: read
+
 jobs:
   bats_tests:
     runs-on: ubuntu-22.04
