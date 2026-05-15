@@ -176,6 +176,7 @@ func TestPodConfigStore_Persistence(t *testing.T) {
 		t.Fatalf("NewPodConfigStore() error: %v", err)
 	}
 	store1.SetDeviceConfig("pod-1", "eth0", config)
+	store1.SetPodNetNs("pod-1", "/var/run/netns/test-ns")
 	store1.Close()
 
 	// Reopen and verify data was restored from checkpoint.
@@ -203,6 +204,11 @@ func TestPodConfigStore_Persistence(t *testing.T) {
 	}
 	if len(podConfig.DeviceConfigs) != 1 {
 		t.Errorf("Expected 1 device config after reopen, got %d", len(podConfig.DeviceConfigs))
+	}
+
+	// Verify NetNS is NOT restored (in-memory only)
+	if podConfig.NetNS != "" {
+		t.Errorf("Expected NetNS to be empty after reopen, but got %s", podConfig.NetNS)
 	}
 }
 
@@ -385,3 +391,4 @@ func TestPodConfigStore_NoCheckpointer(t *testing.T) {
 		t.Errorf("Close() error: %v", err)
 	}
 }
+

@@ -225,6 +225,69 @@ func TestSynchronizePrunesStaleConfigs(t *testing.T) {
 	}
 }
 
+func TestSynchronizeStoresNetNSOnlyForConfiguredPods(t *testing.T) {
+	store := mustNewPodConfigStore()
+
+	// Pod 1: Has device config (configured)
+	store.SetDeviceConfig("configured-pod", "eth0", DeviceConfig{}) //nolint:errcheck
+
+	// Pod 2: Does not have device config (unconfigured)
+
+	np := &NetworkDriver{
+		podConfigStore: store,
+		netdb:          inventory.New(),
+	}
+
+	pods := []*api.PodSandbox{
+		{
+			Uid:       "configured-pod",
+			Name:      "configured",
+			Namespace: "default",
+			Linux: &api.LinuxPodSandbox{
+				Namespaces: []*api.LinuxNamespace{
+					{Type: "network", Path: "/var/run/netns/configured"},
+				},
+			},
+		},
+		{
+			Uid:       "unconfigured-pod",
+			Name:      "unconfigured",
+			Namespace: "default",
+			Linux: &api.LinuxPodSandbox{
+				Namespaces: []*api.LinuxNamespace{
+					{Type: "network", Path: "/var/run/netns/unconfigured"},
+				},
+			},
+		},
+	}
+
+	_, err := np.Synchronize(context.Background(), pods, nil)
+	if err != nil {
+		t.Fatalf("Synchronize() error: %v", err)
+	}
+
+	// Case 1: Configured pod should have its NetNS stored
+	podConfig1, found1 := store.GetPodConfig("configured-pod")
+	if !found1 {
+		t.Error("configured-pod should have its config stored")
+	}
+	if podConfig1.NetNS != "/var/run/netns/configured" {
+		t.Errorf("expected NetNS /var/run/netns/configured, got %q", podConfig1.NetNS)
+	}
+
+	// Case 2: Unconfigured pod should NOT have its NetNS stored
+	podConfig2, found2 := store.GetPodConfig("unconfigured-pod")
+	if found2 && podConfig2.NetNS != "" {
+		t.Error("unconfigured-pod should NOT have its NetNS stored")
+	}
+
+	// Also verify it didn't create a skeleton config for unconfigured-pod
+	_, found3 := store.GetPodConfig("unconfigured-pod")
+	if found3 {
+		t.Error("unconfigured-pod should NOT have any PodConfig in the store")
+	}
+}
+
 func TestCreateContainerMetrics(t *testing.T) {
 	testCases := []struct {
 		name           string
@@ -523,7 +586,7 @@ func TestStopPodSandboxRescanGating(t *testing.T) {
 		{
 			name:              "no device config: early return at NRI level",
 			setupDeviceConfig: false,
-			setupNetNs:        true,
+			setupNetNs:        false,
 		},
 		{
 			name:              "host network pod: stopPodSandbox skips before the loop",
@@ -564,8 +627,8 @@ func TestStopPodSandboxRescanGating(t *testing.T) {
 			if tc.setupDeviceConfig {
 				np.podConfigStore.SetDeviceConfig(podUID, "eth0", tc.deviceConfig)
 			}
-			if tc.setupNetNs {
-				netdb.AddPodNetNs(podKey(pod), "/dummy/netns")
+			if tc.setupDeviceConfig && tc.setupNetNs {
+				np.podConfigStore.SetPodNetNs(podUID, "/dummy/netns")
 			}
 
 			if err := np.StopPodSandbox(context.Background(), pod); err != nil {

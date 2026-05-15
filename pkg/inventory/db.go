@@ -33,7 +33,6 @@ import (
 	"github.com/Mellanox/rdmamap"
 	"github.com/jaypipes/ghw"
 	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netns"
 	"golang.org/x/time/rate"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -75,9 +74,6 @@ type DB struct {
 	gwInterfaces sets.Set[string]
 
 	mu sync.RWMutex
-	// podNetNsStore gives the network namespace for a pod, indexed by the pods
-	// "namespaced/name".
-	podNetNsStore map[string]string
 	// deviceStore is an in-memory cache of the available devices on the node.
 	// It is keyed by the normalized PCI address of the device. The value is a
 	// resourceapi.Device object that contains the device's attributes.
@@ -141,7 +137,7 @@ func WithCloudProviderHint(hint string) Option {
 
 func New(opts ...Option) *DB {
 	db := &DB{
-		podNetNsStore:     map[string]string{},
+        
 		deviceStore:       map[string]resourceapi.Device{},
 		deviceConfigStore: map[string]*apis.NetworkConfig{},
 		rateLimiter:       rate.NewLimiter(rate.Every(defaultMinPollInterval), defaultPollBurst),
@@ -154,31 +150,6 @@ func New(opts ...Option) *DB {
 		o(db)
 	}
 	return db
-}
-
-func (db *DB) AddPodNetNs(pod string, netNsPath string) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	ns, err := netns.GetFromPath(netNsPath)
-	if err != nil {
-		klog.Errorf("Failed to get pod %s network namespace %s handle: %v", pod, netNsPath, err)
-		return
-	}
-	defer ns.Close()
-	db.podNetNsStore[pod] = netNsPath
-}
-
-func (db *DB) RemovePodNetNs(pod string) {
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	delete(db.podNetNsStore, pod)
-}
-
-// GetPodNamespace allows to get the Pod network namespace
-func (db *DB) GetPodNetNs(pod string) string {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return db.podNetNsStore[pod]
 }
 
 func (db *DB) Run(ctx context.Context) error {

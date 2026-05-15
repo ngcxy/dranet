@@ -47,14 +47,12 @@ func (m *fakePluginHelper) RegistrationStatus() *registerapi.RegistrationStatus 
 // mockNetDB is a mock implementation of the inventoryDB interface for testing.
 type fakeInventoryDB struct {
 	resources   chan []resourcev1.Device
-	podNetNs    map[string]string
 	rescanCalls atomic.Int32
 }
 
 func newFakeInventoryDB() *fakeInventoryDB {
 	return &fakeInventoryDB{
 		resources: make(chan []resourcev1.Device, 1),
-		podNetNs:  make(map[string]string),
 	}
 }
 
@@ -69,18 +67,6 @@ func (m *fakeInventoryDB) GetNetInterfaceName(_ string) (string, error) { return
 func (m *fakeInventoryDB) IsIBOnlyDevice(_ string) bool { return false }
 
 func (m *fakeInventoryDB) GetRDMADeviceName(_ string) (string, error) { return "", nil }
-
-func (m *fakeInventoryDB) AddPodNetNs(podKey string, netNs string) {
-	m.podNetNs[podKey] = netNs
-}
-
-func (m *fakeInventoryDB) RemovePodNetNs(podKey string) {
-	delete(m.podNetNs, podKey)
-}
-
-func (m *fakeInventoryDB) GetPodNetNs(podKey string) string {
-	return m.podNetNs[podKey]
-}
 
 func (m *fakeInventoryDB) GetDeviceConfig(deviceName string) (*apis.NetworkConfig, bool) {
 	return nil, false

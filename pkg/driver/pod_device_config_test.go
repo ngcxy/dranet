@@ -107,6 +107,58 @@ func TestPodConfigStore_SetAndGet(t *testing.T) {
 	}
 }
 
+// TestPodConfigStore_NetNs verifies that NetNS path can be stored and retrieved correctly in memory.
+func TestPodConfigStore_NetNs(t *testing.T) {
+	store := mustNewPodConfigStore()
+	podUID := types.UID("test-pod-uid-1")
+	netns := "/var/run/netns/test-ns"
+
+	// Test Get on non-existent item
+	podCfg, found := store.GetPodConfig(podUID)
+	if found {
+		t.Errorf("GetPodConfig() found a config before SetDeviceConfig(), expected not found")
+	}
+
+	// Add a dummy device config so the pod exists in the store
+	store.SetDeviceConfig(podUID, "dummy-device", DeviceConfig{})
+
+	// Verify that NetNS is empty initially
+	podCfg, found = store.GetPodConfig(podUID)
+	if !found {
+		t.Fatalf("GetPodConfig() did not find config after SetDeviceConfig()")
+	}
+	if podCfg.NetNS != "" {
+		t.Errorf("NetNS should be empty initially, got %s", podCfg.NetNS)
+	}
+
+	store.SetPodNetNs(podUID, netns)
+
+	podCfg, found = store.GetPodConfig(podUID)
+	if !found {
+		t.Fatalf("GetPodConfig() did not find config after SetPodNetNs(), expected found")
+	}
+	if podCfg.NetNS != netns {
+		t.Errorf("GetPodConfig() retrieved NetNS %s, want %s", podCfg.NetNS, netns)
+	}
+
+	// Test Get with different podUID
+	_, found = store.GetPodConfig(types.UID("other-pod-uid"))
+	if found {
+		t.Errorf("GetPodConfig() found config for wrong podUID, expected not found")
+	}
+
+	// Test overwriting
+	newNetNs := "/var/run/netns/new-ns"
+	store.SetPodNetNs(podUID, newNetNs)
+	podCfg, found = store.GetPodConfig(podUID)
+	if !found {
+		t.Fatalf("GetPodConfig() did not find config after overwrite, expected found")
+	}
+	if podCfg.NetNS != newNetNs {
+		t.Errorf("GetPodConfig() retrieved NetNS %s after overwrite, want %s", podCfg.NetNS, newNetNs)
+	}
+}
+
 func TestPodConfigStore_DeletePod(t *testing.T) {
 	store := mustNewPodConfigStore()
 	podUID1 := types.UID("test-pod-uid-1")

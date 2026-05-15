@@ -42,24 +42,22 @@ func (np *NetworkDriver) Synchronize(_ context.Context, pods []*api.PodSandbox, 
 	klog.Infof("Synchronized state with the runtime (%d pods, %d containers)...",
 		len(pods), len(containers))
 
-	livePods := set.New[types.UID]()
+	// livePodNetNs map tracks live pods by UID and their network namespace paths.
+	livePodNetNs := make(map[types.UID]string)
 	for _, pod := range pods {
 		klog.Infof("Synchronize Pod %s/%s UID %s", pod.Namespace, pod.Name, pod.Uid)
 		klog.V(2).Infof("pod %s/%s: namespace=%s ips=%v", pod.GetNamespace(), pod.GetName(), getNetworkNamespace(pod), pod.GetIps())
-		livePods.Insert(types.UID(pod.Uid))
-		// get the pod network namespace
-		ns := getNetworkNamespace(pod)
-		// host network pods are skipped
-		if ns != "" {
-			// store the Pod metadata in the db
-			np.netdb.AddPodNetNs(podKey(pod), ns)
-		}
+		livePodNetNs[types.UID(pod.Uid)] = getNetworkNamespace(pod)
 	}
 
-	// Prune persisted configs for pods that no longer exist in the runtime.
-	// This handles the case where pods were deleted while the driver was down.
+	// Process stored pods: update NetNS for live pods, and prune configurations
+	// for pods that no longer exist in the runtime.
 	for _, storedUID := range np.podConfigStore.ListPods() {
-		if !livePods.Has(storedUID) {
+		ns, isLive := livePodNetNs[storedUID]
+
+		if isLive {
+			np.podConfigStore.SetPodNetNs(storedUID, ns)
+		} else {
 			klog.Infof("Synchronize: pruning stale config for pod %s", storedUID)
 			np.podConfigStore.DeletePod(storedUID)
 		}
@@ -152,8 +150,8 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 	if ns == "" {
 		return fmt.Errorf("RunPodSandbox pod %s/%s using host network can not claim host devices", pod.Namespace, pod.Name)
 	}
-	// store the Pod metadata in the db
-	np.netdb.AddPodNetNs(podKey(pod), ns)
+	// store the Pod network namespace in the pod config store
+	np.podConfigStore.SetPodNetNs(types.UID(pod.GetUid()), ns)
 
 	// Track all the status updates needed for the resource claims of the pod.
 	statusUpdates := map[types.NamespacedName]*resourceapply.ResourceClaimStatusApplyConfiguration{}
@@ -363,20 +361,17 @@ func (np *NetworkDriver) StopPodSandbox(ctx context.Context, pod *api.PodSandbox
 }
 
 func (np *NetworkDriver) stopPodSandbox(_ context.Context, pod *api.PodSandbox, podConfig PodConfig) error {
-	defer func() {
-		np.netdb.RemovePodNetNs(podKey(pod))
-	}()
 	// get the pod network namespace
 	ns := getNetworkNamespace(pod)
 	if ns == "" {
 		// some version of containerd does not send the network namespace information on this hook so
 		// we workaround it using the local copy we have in the db to associate interfaces with Pods via
 		// the network namespace id.
-		ns = np.netdb.GetPodNetNs(podKey(pod))
-		if ns == "" {
-			klog.Infof("StopPodSandbox pod %s/%s using host network ... skipping", pod.Namespace, pod.Name)
+		if podConfig.NetNS == "" {
+			klog.Warningf("StopPodSandbox: network namespace for DRANET pod %s/%s (UID %s) is unknown; skipping explicit device detach and relying on kernel netns teardown", pod.Namespace, pod.Name, pod.Uid)
 			return nil
 		}
+		ns = podConfig.NetNS
 	}
 	needsRescan := false
 	for deviceName, config := range podConfig.DeviceConfigs {
@@ -452,7 +447,6 @@ func (np *NetworkDriver) RemovePodSandbox(ctx context.Context, pod *api.PodSandb
 }
 
 func (np *NetworkDriver) removePodSandbox(_ context.Context, pod *api.PodSandbox) error {
-	np.netdb.RemovePodNetNs(podKey(pod))
 	return nil
 }
 
