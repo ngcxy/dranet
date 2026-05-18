@@ -134,7 +134,8 @@ def main():
     elapsed = elapsed_tensor.item()
 
     step_seconds = elapsed / measure_steps
-    # Linear layer training FLOPs: forward matmul + dInput + dWeight.
+    # Linear layer training FLOPs: forward matmul + dInput + dWeight (6ND rule).
+    # See PaLM paper, Appendix B: https://arxiv.org/abs/2204.02311
     flops_per_rank_step = 6.0 * batch_size * hidden_size * hidden_size * layers
     tflops_per_gpu = flops_per_rank_step / step_seconds / 1e12
     device_name = torch.cuda.get_device_name(device)
