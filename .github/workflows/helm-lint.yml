@@ -6,6 +6,9 @@ on:
       - 'deployments/helm/**'
       - '.github/workflows/helm-lint.yml'
 
+permissions:
+  contents: read
+
 jobs:
   helm-lint:
     runs-on: ubuntu-latest
