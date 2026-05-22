@@ -20,7 +20,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,6 +84,7 @@ type gceNetworkInterface struct {
 	MTU       int      `json:"mtu,omitempty"`
 	Network   string   `json:"network,omitempty"`
 	IPAliases []string `json:"ipAliases,omitempty"`
+	Gateway   string   `json:"gateway,omitempty"`
 }
 
 var _ cloudprovider.CloudInstance = (*GCEInstance)(nil)
@@ -154,8 +157,101 @@ func (g *GCEInstance) GetDeviceAttributes(id cloudprovider.DeviceIdentifiers) ma
 // GetDeviceConfig fetches any infrastructure-specific network configuration
 // required by the device. Returning nil means no specific config is needed.
 func (g *GCEInstance) GetDeviceConfig(id cloudprovider.DeviceIdentifiers) *apis.NetworkConfig {
-	// POC TODO: Fetch the actual IP range assigned to this interface and return it in apis.NetworkConfig.Interface.IPRange.
-	return nil
+	config := &apis.NetworkConfig{}
+
+	// Find the matching interface in GCE metadata
+	var iface *gceNetworkInterface
+	ifaceIndex := -1
+	for index, i := range g.Interfaces {
+		if i.Mac == id.MAC {
+			iface = &g.Interfaces[index]
+			ifaceIndex = index
+			break
+		}
+	}
+
+	if iface == nil {
+		klog.V(4).Infof("No GCE metadata network interface found for MAC %q", id.MAC)
+		return nil
+	}
+
+	// POC: retrieve IPRange for IPv6 or IPv4
+	const pocConfigEnabled = true
+	if pocConfigEnabled {
+		// For IPv6, calculate the range by appending 0xC0DE to the base range
+		// reference: https://source.corp.google.com/h/asapd-lite/asapd-lite/+/main:ipam/ip/ip.go;l=255
+		if len(iface.IPv6) > 0 {
+			const workerIPCode = 0xC0DE
+			baseIPStr := iface.IPv6[0]
+			var baseIP net.IP
+			var prefixLen int
+
+			_, ipnet, err := net.ParseCIDR(baseIPStr)
+			if err != nil {
+				// If it's not a CIDR, try parsing it as a plain IP
+				baseIP = net.ParseIP(baseIPStr)
+				if baseIP == nil {
+					klog.Warningf("Failed to parse IP or CIDR %q", baseIPStr)
+					return nil
+				}
+				prefixLen = 96 // Fallback default
+			} else {
+				prefixLen, _ = ipnet.Mask.Size()
+				baseIP = ipnet.IP
+			}
+
+			if baseIP != nil {
+				ip16 := baseIP.To16()
+				if ip16 != nil {
+					workerIP := make(net.IP, 16)
+					numBaseBytes := prefixLen / 8
+
+					if numBaseBytes <= 14 {
+						copy(workerIP[0:numBaseBytes], ip16[0:numBaseBytes])
+						workerIP[numBaseBytes] = byte(workerIPCode >> 8)
+						workerIP[numBaseBytes+1] = byte(workerIPCode & 0xFF)
+						newPrefixLen := (numBaseBytes + 2) * 8
+
+						config.Interface.IPRange = workerIP.String() + "/" + strconv.Itoa(newPrefixLen)
+					} else {
+						klog.Warningf("Prefix length %d is too large to append CODE", prefixLen)
+					}
+				}
+			}
+			// For IPv4, get the IPRange from Alias IP Ranges if available
+		} else if len(iface.IPAliases) > 0 {
+			config.Interface.IPRange = iface.IPAliases[0]
+		} else {
+			klog.Warningf("No IPRange found for device with mac %q", id.MAC)
+		}
+	}
+
+	// POC: for Bare Metal machine, configure gateway for routing
+	if strings.HasSuffix(g.Type, "-metal") {
+
+		// Use the interface index from GCE metadata as the unique table ID
+		tableID := 100 + ifaceIndex
+
+		// Create default route, it will be copied into IPVLAN interface for source-based routing
+		gateway = iface.Gateway
+		if gateway == "" {
+			klog.Warningf("Gateway not found for device with mac %q", id.MAC)
+		} else {
+
+			config.Routes = append(config.Routes, apis.RouteConfig{
+				Destination: "::/0",
+				Gateway:     gateway,
+				Table:       tableID,
+			})
+			// Add permanent neighbor for gateway
+			config.Neighbors = append(config.Neighbors, apis.NeighborConfig{
+				Destination:  "fe80::1",
+				HardwareAddr: "02:32:00:00:00:00",
+			})
+		}
+	}
+
+	return config
 }
 
 // GetInstance retrieves GCE instance properties by querying the metadata server.
