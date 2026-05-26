@@ -3,13 +3,13 @@ module sigs.k8s.io/dranet
 go 1.26.0
 
 require (
-	cloud.google.com/go/compute v1.63.0
+	cloud.google.com/go/compute v1.64.0
 	cloud.google.com/go/compute/metadata v0.9.0
 	cloud.google.com/go/container v1.52.0
 	dario.cat/mergo v1.0.2
 	github.com/Mellanox/rdmamap v1.2.0
 	github.com/aws-neuron/connected-device-maps-over-efa-for-neuron v1.1.0
-	github.com/aws/aws-sdk-go-v2/config v1.32.17
+	github.com/aws/aws-sdk-go-v2/config v1.32.18
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.23
 	github.com/cilium/ebpf v0.21.0
 	github.com/containerd/nri v0.12.0
@@ -26,7 +26,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	go.etcd.io/bbolt v1.4.3
-	golang.org/x/sys v0.44.0
+	golang.org/x/sys v0.45.0
 	golang.org/x/time v0.15.0
 	google.golang.org/api v0.280.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
@@ -49,7 +49,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.7 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.16 // indirect
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.23 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.23 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.24 // indirect
@@ -57,7 +57,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.13.23 // indirect
 	github.com/aws/aws-sdk-go-v2/service/signin v1.0.11 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.30.17 // indirect
-	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.21 // indirect
+	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.36.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.1 // indirect
 	github.com/aws/smithy-go v1.25.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -123,7 +123,7 @@ require (
 	golang.org/x/term v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260401024825-9d38bb4040a9 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260511170946-3700d4141b60 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260511170946-3700d4141b60 // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.13.0 // indirect
