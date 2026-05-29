@@ -275,6 +275,24 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			deviceCfg.NetworkInterfaceConfigInPod.Interface.Name = ifName
 		}
 
+		// For SR-IOV VFs, check that the requested MTU does not exceed the parent PF's MTU.
+		// If it does, log an error and fail the Pod creation to avoid silent misconfiguration.
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU != nil {
+			if pfName, err := inventory.GetPFInterfaceName(ifName); err == nil {
+				if pfLink, err := nlHandle.LinkByName(pfName); err == nil {
+					pfMTU := pfLink.Attrs().MTU
+					requestedMTU := int(*deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU)
+					if requestedMTU > pfMTU {
+						klog.Errorf("requested MTU %d for SR-IOV VF %s exceeds parent PF %s MTU %d",
+							requestedMTU, ifName, pfName, pfMTU)
+						errorList = append(errorList, fmt.Errorf("requested MTU %d for SR-IOV VF %s exceeds parent PF %s MTU %d",
+							requestedMTU, ifName, pfName, pfMTU))
+						continue
+					}
+				}
+			}
+		}
+
 		// If DHCP is requested, do a DHCP request to gather the network parameters (IPs and Routes)
 		// ... but we DO NOT apply them in the root namespace
 		if deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP != nil && *deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP {
