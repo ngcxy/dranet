@@ -275,20 +275,25 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			deviceCfg.NetworkInterfaceConfigInPod.Interface.Name = ifName
 		}
 
-		// For SR-IOV VFs, check that the requested MTU does not exceed the parent PF's MTU.
-		// If it does, log an error and fail the Pod creation to avoid silent misconfiguration.
+		// For SR-IOV VFs, the requested MTU must not exceed the parent PF's MTU.
+		// Otherwise the claim is rejected so the Pod fails fast instead of being
+		// created with an illegal MTU configuration.
 		if deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU != nil {
-			if pfName, err := inventory.GetPFInterfaceName(ifName); err == nil {
-				if pfLink, err := nlHandle.LinkByName(pfName); err == nil {
-					pfMTU := pfLink.Attrs().MTU
-					requestedMTU := int(*deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU)
-					if requestedMTU > pfMTU {
-						klog.Errorf("requested MTU %d for SR-IOV VF %s exceeds parent PF %s MTU %d",
-							requestedMTU, ifName, pfName, pfMTU)
-						errorList = append(errorList, fmt.Errorf("requested MTU %d for SR-IOV VF %s exceeds parent PF %s MTU %d",
-							requestedMTU, ifName, pfName, pfMTU))
-						continue
-					}
+			pfName, err := inventory.GetPFInterfaceName(ifName)
+			if err != nil {
+				// Not an SR-IOV VF, or the parent PF cannot be determined. This is
+				// expected for regular interfaces, so skip the check and only log it.
+				klog.V(4).Infof("skipping SR-IOV VF MTU check for interface %s: %v", ifName, err)
+			} else {
+				pfLink, err := nlHandle.LinkByName(pfName)
+				if err != nil {
+					errorList = append(errorList, fmt.Errorf("failed to get netlink to parent PF %s of VF %s: %v", pfName, ifName, err))
+					continue
+				}
+				requestedMTU := int(*deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU)
+				if err := validateVFMTU(ifName, pfName, requestedMTU, pfLink.Attrs().MTU); err != nil {
+					errorList = append(errorList, err)
+					continue
 				}
 			}
 		}
@@ -515,6 +520,17 @@ func buildRDMAConfig(rdmaDevName string, charDevices sets.Set[string]) RDMAConfi
 		}
 	}
 	return cfg
+}
+
+// validateVFMTU returns an error if the MTU requested for an SR-IOV VF exceeds
+// the parent PF's MTU, which is an illegal configuration. vfName and pfName are
+// only used to build a descriptive error message.
+func validateVFMTU(vfName, pfName string, requestedMTU, pfMTU int) error {
+	if requestedMTU > pfMTU {
+		return fmt.Errorf("requested MTU %d for SR-IOV VF %s exceeds parent PF %s MTU %d",
+			requestedMTU, vfName, pfName, pfMTU)
+	}
+	return nil
 }
 
 // getRuleInfo lists all IP rules in the host network namespace and groups them

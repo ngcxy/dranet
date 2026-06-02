@@ -276,3 +276,50 @@ func TestPublishResourcesMetrics(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateVFMTU(t *testing.T) {
+	testCases := []struct {
+		name         string
+		requestedMTU int
+		pfMTU        int
+		wantErr      bool
+	}{
+		{
+			name:         "requested MTU below PF MTU is allowed",
+			requestedMTU: 1500,
+			pfMTU:        9000,
+			wantErr:      false,
+		},
+		{
+			name:         "requested MTU equal to PF MTU is allowed",
+			requestedMTU: 9000,
+			pfMTU:        9000,
+			wantErr:      false,
+		},
+		{
+			name:         "requested MTU above PF MTU is rejected",
+			requestedMTU: 9000,
+			pfMTU:        1500,
+			wantErr:      true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateVFMTU("eth1", "eth0", tc.requestedMTU, tc.pfMTU)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("validateVFMTU() expected error, got nil")
+				}
+				want := fmt.Sprintf("requested MTU %d for SR-IOV VF eth1 exceeds parent PF eth0 MTU %d", tc.requestedMTU, tc.pfMTU)
+				if err.Error() != want {
+					t.Errorf("validateVFMTU() error = %q, want %q", err.Error(), want)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("validateVFMTU() unexpected error: %v", err)
+			}
+		})
+	}
+}
