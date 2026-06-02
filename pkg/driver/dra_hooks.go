@@ -144,19 +144,25 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 	defer func() {
 		klog.V(2).Infof("PrepareResourceClaim Claim %s/%s  took %v", claim.Namespace, claim.Name, time.Since(start))
 	}()
-	// TODO: shared devices may allocate the same device to multiple pods, i.e. macvlan, ipvlan, ...
-	podUIDs := []types.UID{}
-	for _, reserved := range claim.Status.ReservedFor {
-		if reserved.Resource != "pods" || reserved.APIGroup != "" {
-			klog.Infof("Driver only supports Pods, unsupported reference %#v", reserved)
-			continue
-		}
-		podUIDs = append(podUIDs, reserved.UID)
-	}
-	if len(podUIDs) == 0 {
+	if len(claim.Status.ReservedFor) == 0 {
 		klog.Infof("no pods allocated to claim %s/%s", claim.Namespace, claim.Name)
 		return kubeletplugin.PrepareResult{}
 	}
+	if len(claim.Status.ReservedFor) > 1 {
+		return kubeletplugin.PrepareResult{
+			Err: fmt.Errorf("driver only supports one pod per claim, got %d", len(claim.Status.ReservedFor)),
+		}
+	}
+
+	// One ResourceClaim is consumed by a single pod, regardless of whether the device is allocated in
+	// exclusive or shared (e.g., ipvlan, macvlan) way, so we process the first and only consumer in ReservedFor.
+	reserved := claim.Status.ReservedFor[0]
+	if reserved.Resource != "pods" || reserved.APIGroup != "" {
+		return kubeletplugin.PrepareResult{
+			Err: fmt.Errorf("driver only supports Pods, unsupported reference %#v", reserved),
+		}
+	}
+	podUID := reserved.UID
 
 	nlHandle, err := nlwrap.NewHandle()
 	if err != nil {
@@ -247,12 +253,10 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 				continue
 			}
 			deviceCfg.RDMADevice = buildRDMAConfig(rdmaDevName, charDevices)
-			for _, uid := range podUIDs {
-				if err := np.podConfigStore.SetDeviceConfig(uid, result.Device, deviceCfg); err != nil {
-					errorList = append(errorList, fmt.Errorf("failed to persist device config for pod %s device %s: %v", uid, result.Device, err))
-				}
+			if err := np.podConfigStore.SetDeviceConfig(podUID, result.Device, deviceCfg); err != nil {
+				errorList = append(errorList, fmt.Errorf("failed to persist device config for pod %s device %s: %v", podUID, result.Device, err))
 			}
-			klog.V(4).Infof("IB-only claim resources for pods %v : %#v", podUIDs, deviceCfg)
+			klog.V(4).Infof("IB-only claim resources for pod %s : %#v", podUID, deviceCfg)
 			continue
 		}
 
@@ -395,14 +399,10 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			}
 		}
 
-		// TODO: support for multiple pods sharing the same device
-		// we'll create the subinterface here
-		for _, uid := range podUIDs {
-			if err := np.podConfigStore.SetDeviceConfig(uid, result.Device, deviceCfg); err != nil {
-				errorList = append(errorList, fmt.Errorf("failed to persist device config for pod %s device %s: %v", uid, result.Device, err))
-			}
+		if err := np.podConfigStore.SetDeviceConfig(podUID, result.Device, deviceCfg); err != nil {
+			errorList = append(errorList, fmt.Errorf("failed to persist device config for pod %s device %s: %v", podUID, result.Device, err))
 		}
-		klog.V(4).Infof("Claim Resources for pods %v : %#v", podUIDs, deviceCfg)
+		klog.V(4).Infof("Claim Resources for pod %s : %#v", podUID, deviceCfg)
 	}
 
 	if len(errorList) > 0 {
