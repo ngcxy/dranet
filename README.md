@@ -95,10 +95,10 @@ Install the latest stable version of DRANET using the provided manifest:
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/dranet/refs/heads/main/install.yaml
 ```
 
-To install using the Helm chart from a local tree:
+or using the Helm chart:
 
 ```sh
-helm upgrade --install dranet ./deployments/helm/dranet -n kube-system
+helm install -n kube-system dranet oci://registry.k8s.io/networking/charts/dranet --version v1.3.0
 ```
 
 For available configuration options, see the [chart README](deployments/helm/dranet/README.md).
