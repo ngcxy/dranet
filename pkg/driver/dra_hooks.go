@@ -278,23 +278,21 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 		// For SR-IOV VFs, the requested MTU must not exceed the parent PF's MTU.
 		// Otherwise the claim is rejected so the Pod fails fast instead of being
 		// created with an illegal MTU configuration.
-		if deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU != nil {
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU != nil && inventory.IsSriovVf(ifName) {
 			pfName, err := inventory.GetPFInterfaceName(ifName)
 			if err != nil {
-				// Not an SR-IOV VF, or the parent PF cannot be determined. This is
-				// expected for regular interfaces, so skip the check and only log it.
-				klog.V(4).Infof("skipping SR-IOV VF MTU check for interface %s: %v", ifName, err)
-			} else {
-				pfLink, err := nlHandle.LinkByName(pfName)
-				if err != nil {
-					errorList = append(errorList, fmt.Errorf("failed to get netlink to parent PF %s of VF %s: %v", pfName, ifName, err))
-					continue
-				}
-				requestedMTU := int(*deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU)
-				if err := validateVFMTU(ifName, pfName, requestedMTU, pfLink.Attrs().MTU); err != nil {
-					errorList = append(errorList, err)
-					continue
-				}
+				errorList = append(errorList, fmt.Errorf("failed to determine parent PF for SR-IOV VF %s: %v", ifName, err))
+				continue
+			}
+			pfLink, err := nlHandle.LinkByName(pfName)
+			if err != nil {
+				errorList = append(errorList, fmt.Errorf("failed to get netlink to parent PF %s of VF %s: %v", pfName, ifName, err))
+				continue
+			}
+			requestedMTU := int(*deviceCfg.NetworkInterfaceConfigInPod.Interface.MTU)
+			if err := validateVFMTU(ifName, pfName, requestedMTU, pfLink.Attrs().MTU); err != nil {
+				errorList = append(errorList, err)
+				continue
 			}
 		}
 
