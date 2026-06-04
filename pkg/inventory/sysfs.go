@@ -112,6 +112,34 @@ func isSriovVf(name string, syspath string) bool {
 	return info.Mode()&os.ModeSymlink != 0
 }
 
+// IsSriovVf reports whether a network interface is a SR-IOV Virtual Function.
+func IsSriovVf(name string) bool {
+	return isSriovVf(name, sysnetPath)
+}
+
+// getPFInterfaceNameFromSysfs returns the name of the Physical Function (PF) network
+// interface for a given SR-IOV Virtual Function (VF) interface, using basePath as the
+// root of the sysfs net directory (e.g. /sys/class/net). It returns an error if the
+// interface is not a VF or if the PF interface cannot be determined.
+func getPFInterfaceNameFromSysfs(basePath, vfName string) (string, error) {
+	pfNetPath := filepath.Join(basePath, vfName, "device", "physfn", "net")
+	entries, err := os.ReadDir(pfNetPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read PF net directory for VF %s: %w", vfName, err)
+	}
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no PF interface found for VF %s", vfName)
+	}
+	return entries[0].Name(), nil
+}
+
+// GetPFInterfaceName returns the name of the Physical Function (PF) network interface
+// for a given SR-IOV Virtual Function (VF) interface. It returns an error if the
+// interface is not a VF or if the PF interface cannot be determined.
+func GetPFInterfaceName(vfName string) (string, error) {
+	return getPFInterfaceNameFromSysfs(sysnetPath, vfName)
+}
+
 // GetRdmaDevice returns the RDMA device name for a given network interface by
 // first checking GetRdmaDeviceForNetdevice. If rdmamap fails, it falls back to
 // checking the sysfs infiniband directory. This serves as a workaround for

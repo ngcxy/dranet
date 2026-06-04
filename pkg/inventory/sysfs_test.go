@@ -190,6 +190,93 @@ func TestIsSriovVf(t *testing.T) {
 	})
 }
 
+func TestGetPFInterfaceNameFromSysfs(t *testing.T) {
+	testCases := []struct {
+		name        string
+		vfName      string
+		setupFunc   func(t *testing.T, baseDir string)
+		want        string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:   "VF with single PF interface",
+			vfName: "eth1",
+			setupFunc: func(t *testing.T, baseDir string) {
+				t.Helper()
+				pfNetDir := filepath.Join(baseDir, "eth1", "device", "physfn", "net", "eth0")
+				if err := os.MkdirAll(pfNetDir, 0o755); err != nil {
+					t.Fatalf("failed to create PF net directory: %v", err)
+				}
+			},
+			want:    "eth0",
+			wantErr: false,
+		},
+		{
+			name:   "not a VF - physfn directory missing",
+			vfName: "eth2",
+			setupFunc: func(t *testing.T, baseDir string) {
+				t.Helper()
+				deviceDir := filepath.Join(baseDir, "eth2", "device")
+				if err := os.MkdirAll(deviceDir, 0o755); err != nil {
+					t.Fatalf("failed to create device directory: %v", err)
+				}
+			},
+			wantErr:     true,
+			errContains: "failed to read PF net directory for VF eth2",
+		},
+		{
+			name:   "physfn net directory exists but is empty",
+			vfName: "eth3",
+			setupFunc: func(t *testing.T, baseDir string) {
+				t.Helper()
+				pfNetDir := filepath.Join(baseDir, "eth3", "device", "physfn", "net")
+				if err := os.MkdirAll(pfNetDir, 0o755); err != nil {
+					t.Fatalf("failed to create PF net directory: %v", err)
+				}
+			},
+			wantErr:     true,
+			errContains: "no PF interface found for VF eth3",
+		},
+		{
+			name:   "interface does not exist",
+			vfName: "nonexistent",
+			setupFunc: func(t *testing.T, baseDir string) {
+				// Do not create anything
+			},
+			wantErr:     true,
+			errContains: "failed to read PF net directory for VF nonexistent",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			tc.setupFunc(t, tmpDir)
+
+			got, err := getPFInterfaceNameFromSysfs(tmpDir, tc.vfName)
+
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("getPFInterfaceNameFromSysfs() expected error, got nil")
+					return
+				}
+				if tc.errContains != "" && !strings.Contains(err.Error(), tc.errContains) {
+					t.Errorf("getPFInterfaceNameFromSysfs() error = %v, want error containing %q", err, tc.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("getPFInterfaceNameFromSysfs() unexpected error: %v", err)
+				return
+			}
+			if got != tc.want {
+				t.Errorf("getPFInterfaceNameFromSysfs() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestGetRdmaDeviceFromSysfs tests the getRdmaDeviceFromSysfs function
 func TestGetRdmaDeviceFromSysfs(t *testing.T) {
 	testCases := []struct {
