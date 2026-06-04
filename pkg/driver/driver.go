@@ -104,6 +104,7 @@ type NetworkDriver struct {
 	rdmaSharedMode bool
 	podConfigStore *PodConfigStore
 	dbPath         string // path for persistent bbolt database; empty means in-memory
+	ipam           *ipamBoltCheckpointer
 
 	clock clock.WithTicker // Injectable clock for testing
 }
@@ -150,6 +151,29 @@ func Start(ctx context.Context, driverName string, kubeClient kubernetes.Interfa
 		return nil, fmt.Errorf("failed to initialize pod config store: %v", err)
 	}
 	plugin.podConfigStore = store
+
+	// Initialize the IPAM database.
+	if plugin.dbPath != "" {
+		ipamPath := filepath.Join(filepath.Dir(plugin.dbPath), "ipam.db")
+		var err error
+		plugin.ipam, err = newIPAMBoltCheckpointer(ipamPath)
+		if err != nil {
+			store.Close()
+			return nil, fmt.Errorf("failed to open IPAM database at %s: %v", ipamPath, err)
+		}
+	} else {
+		tempDir, err := os.MkdirTemp("", "dranet-ipam")
+		if err != nil {
+			store.Close()
+			return nil, fmt.Errorf("failed to create temp dir for transient IPAM: %v", err)
+		}
+		ipamPath := filepath.Join(tempDir, "ipam.db")
+		plugin.ipam, err = newIPAMBoltCheckpointer(ipamPath)
+		if err != nil {
+			store.Close()
+			return nil, fmt.Errorf("failed to initialize transient IPAM database: %v", err)
+		}
+	}
 
 	driverPluginPath := filepath.Join(kubeletPluginPath, driverName)
 	err = os.MkdirAll(driverPluginPath, 0750)
@@ -339,6 +363,13 @@ func (np *NetworkDriver) Stop(ctxCancel context.CancelFunc) {
 	// Close the pod config store.
 	if err := np.podConfigStore.Close(); err != nil {
 		klog.Errorf("Failed to close pod config database: %v", err)
+	}
+
+	// Close the IPAM database.
+	if np.ipam != nil {
+		if err := np.ipam.Close(); err != nil {
+			klog.Errorf("Failed to close IPAM database: %v", err)
+		}
 	}
 
 	klog.Info("Driver stopped.")

@@ -269,44 +269,6 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 		}
 		deviceCfg.NetworkInterfaceConfigInHost.Interface.Name = ifName
 
-		if deviceCfg.NetworkInterfaceConfigInPod.Interface.Name == "" {
-			// If the interface name was not explicitly overridden, use the same
-			// interface name within the pod's network namespace.
-			deviceCfg.NetworkInterfaceConfigInPod.Interface.Name = ifName
-		}
-
-		// If DHCP is requested, do a DHCP request to gather the network parameters (IPs and Routes)
-		// ... but we DO NOT apply them in the root namespace
-		if deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP != nil && *deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP {
-			klog.V(2).Infof("trying to get network configuration via DHCP")
-			contextCancel, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			ip, routes, err := getDHCP(contextCancel, ifName)
-			if err != nil {
-				errorList = append(errorList, fmt.Errorf("fail to get configuration via DHCP for %s: %w", ifName, err))
-			} else {
-				deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = []string{ip}
-				deviceCfg.NetworkInterfaceConfigInPod.Routes = append(deviceCfg.NetworkInterfaceConfigInPod.Routes, routes...)
-			}
-		} else if len(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses) == 0 {
-			// If there is no custom addresses and no DHCP, then use the existing ones
-			// get the existing IP addresses
-			nlAddresses, err := nlHandle.AddrList(link, netlink.FAMILY_ALL)
-			if err != nil {
-				errorList = append(errorList, fmt.Errorf("fail to get ip addresses for interface %s : %w", ifName, err))
-			} else {
-				for _, address := range nlAddresses {
-					// Only move IP addresses with global scope because those are not host-specific, auto-configured,
-					// or have limited network scope, making them unsuitable inside the container namespace.
-					// Ref: https://www.ietf.org/rfc/rfc3549.txt
-					if address.Scope != unix.RT_SCOPE_UNIVERSE {
-						continue
-					}
-					deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = append(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses, address.IPNet.String())
-				}
-			}
-		}
-
 		// Obtain the existing supported ethtool features and validate the config
 		if deviceCfg.NetworkInterfaceConfigInPod.Ethtool != nil {
 			client, err := newEthtoolClient(0)
@@ -392,6 +354,98 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			err := unpinBPFPrograms(ifName)
 			if err != nil {
 				klog.Infof("error unpinning ebpf programs for %s : %v", ifName, err)
+			}
+		}
+
+		// Subinterface path: pod is allocated with a child interface
+		// with the parent interface staying in host.
+		// The IP address is generated based on the given IPRange for the subinterface.
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.SubInterface != nil {
+			klog.V(2).Infof("Subinterface mode triggered for parent %s", ifName)
+
+			// Set interface name in pod if not explicitly overridden
+			if deviceCfg.NetworkInterfaceConfigInPod.Interface.Name == "" {
+				deviceCfg.NetworkInterfaceConfigInPod.Interface.Name = "sub-" + ifName
+			}
+			// Allocate specific IP for the subinterface
+			var ip string
+			if deviceCfg.NetworkInterfaceConfigInPod.Interface.SubInterface.IPRange != "" {
+				podIPs, errs := np.getSubInterfaceIP(deviceCfg.NetworkInterfaceConfigInPod.Interface.SubInterface.IPRange, podUIDs, ifName)
+				if len(errs) > 0 {
+					errorList = append(errorList, errs...)
+					continue
+				}
+				if len(podUIDs) > 0 {
+					ip = podIPs[podUIDs[0]]
+					deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = []string{ip}
+				}
+			}
+
+			// Add source-based routing rule for the allocated IP
+			var tableID int
+			for _, r := range deviceCfg.NetworkInterfaceConfigInPod.Routes {
+				if r.Destination == "::/0" && r.Table != 0 {
+					tableID = r.Table
+					break
+				}
+			}
+			if tableID != 0 && ip != "" {
+				mask := "/128" // single IPv6 address
+				if strings.Contains(ip, ".") {
+					mask = "/32" // single IPv4 address
+				}
+				deviceCfg.NetworkInterfaceConfigInPod.Rules = append(deviceCfg.NetworkInterfaceConfigInPod.Rules, apis.RuleConfig{
+					Source:   ip + mask,
+					Table:    tableID,
+					Priority: 32000,
+				})
+			}
+
+			// Persist device config for subinterface mode
+			for _, uid := range podUIDs {
+				if err := np.podConfigStore.SetDeviceConfig(uid, result.Device, deviceCfg); err != nil {
+					errorList = append(errorList, fmt.Errorf("failed to persist device config for pod %s device %s: %v", uid, result.Device, err))
+				}
+			}
+			klog.V(4).Infof("Subinterface claim resources for pods %v : %#v", podUIDs, deviceCfg)
+			continue
+		}
+
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.Name == "" {
+			// If the interface name was not explicitly overridden, use the same
+			// interface name within the pod's network namespace.
+			deviceCfg.NetworkInterfaceConfigInPod.Interface.Name = ifName
+		}
+
+		// If DHCP is requested, do a DHCP request to gather the network parameters (IPs and Routes)
+		// ... but we DO NOT apply them in the root namespace
+		if deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP != nil && *deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP {
+			klog.V(2).Infof("trying to get network configuration via DHCP")
+			contextCancel, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			ip, routes, err := getDHCP(contextCancel, ifName)
+			if err != nil {
+				errorList = append(errorList, fmt.Errorf("fail to get configuration via DHCP for %s: %w", ifName, err))
+			} else {
+				deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = []string{ip}
+				deviceCfg.NetworkInterfaceConfigInPod.Routes = append(deviceCfg.NetworkInterfaceConfigInPod.Routes, routes...)
+			}
+		} else if len(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses) == 0 {
+			// If there is no custom addresses and no DHCP, then use the existing ones
+			// get the existing IP addresses
+			nlAddresses, err := nlHandle.AddrList(link, netlink.FAMILY_ALL)
+			if err != nil {
+				errorList = append(errorList, fmt.Errorf("fail to get ip addresses for interface %s : %w", ifName, err))
+			} else {
+				for _, address := range nlAddresses {
+					// Only move IP addresses with global scope because those are not host-specific, auto-configured,
+					// or have limited network scope, making them unsuitable inside the container namespace.
+					// Ref: https://www.ietf.org/rfc/rfc3549.txt
+					if address.Scope != unix.RT_SCOPE_UNIVERSE {
+						continue
+					}
+					deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = append(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses, address.IPNet.String())
+				}
 			}
 		}
 
@@ -586,4 +640,26 @@ func getRouteInfo(nlHandle nlwrap.Handle, ifName string, link netlink.Link) ([]a
 		}
 	}
 	return routes, tables, nil
+}
+
+// getSubInterfaceIP
+func (np *NetworkDriver) getSubInterfaceIP(ipRange string, podUIDs []types.UID, deviceName string) (map[types.UID]string, []error) {
+	podIPs := make(map[types.UID]string)
+	var errorList []error
+
+	dbPath := np.dbPath
+	if dbPath == "" {
+		dbPath = "ipconf.db"
+	}
+	for _, uid := range podUIDs {
+		ip, err := GetIPFromRange(ipRange, uid, dbPath)
+		if err != nil {
+			errorList = append(errorList, fmt.Errorf("Failed to allocate IP for pod %s: %v", uid, err))
+			continue
+		}
+		klog.V(2).Infof("Successfully allocated IP %s for pod %s", ip.String(), uid)
+		podIPs[uid] = ip.String()
+	}
+
+	return podIPs, errorList
 }

@@ -86,6 +86,10 @@ type InterfaceConfig struct {
 	// If provided, the interface will be enslaved to a VRF device with this name.
 	// This enables grouping multiple network interfaces into the same VRF.
 	VRF *VRFConfig `json:"vrf,omitempty"`
+
+	// SubInterface defines the configuration for subinterface on this interface.
+	// If subinterface creation is triggered, this will be used as a reference during configuration .
+	SubInterface *SubInterfaceConfig `json:"subInterface,omitempty"`
 }
 
 // VRFConfig represents the configuration for a Virtual Routing and Forwarding domain.
@@ -99,6 +103,27 @@ type VRFConfig struct {
 	// Common reserved tables: 255 (local), 254 (main), 253 (default).
 	Table *int `json:"table,omitempty"`
 }
+
+// SubInterfaceConfig represents the configuration for creating a subinterface.
+type SubInterfaceConfig struct {
+	// Type indicates the type of subinterface to create.
+	// Options: "ipvlan". Default: "ipvlan".
+	Type SubInterfaceType `json:"type,omitempty"`
+
+	// IPRange is the range to allocate IP addresses for the subinterface
+	IPRange string `json:"ipRange,omitempty"`
+
+	// IPVlanMode specifies the IPVLAN mode.
+	// Options: "l2", "l3", "l3s". Default: "l2".
+	IPVlanMode string `json:"ipvlanMode,omitempty"`
+
+	// IPVlanFlag specifies the IPVLAN flag.
+	// Options: "bridge", "private", "vepa". Default: "bridge".
+	IPVlanFlag string `json:"ipvlanFlag,omitempty"`
+}
+
+// SubInterfaceType defines the type of subinterface to create.
+type SubInterfaceType string
 
 // RouteConfig represents a network route configuration.
 type RouteConfig struct {
