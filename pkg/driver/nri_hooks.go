@@ -23,6 +23,7 @@ import (
 
 	"github.com/containerd/nri/pkg/api"
 
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	metav1apply "k8s.io/client-go/applyconfigurations/meta/v1"
@@ -176,6 +177,8 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 		// Block 1: netdev operations — only when a network interface is present.
 		if ifName != "" {
 			if err := attachNetdevToNS(pod, ns, deviceName, config, resourceClaimStatusDevice); err != nil {
+				np.eventRecorder.Eventf(podObjectRef(pod), v1.EventTypeWarning, "NetworkDeviceAttachFailed",
+					"failed to attach network device %s to pod %s/%s: %v", deviceName, pod.GetNamespace(), pod.GetName(), err)
 				return err
 			}
 		}
@@ -185,6 +188,8 @@ func (np *NetworkDriver) runPodSandbox(_ context.Context, pod *api.PodSandbox, p
 		// for RoCE (netdev + RDMA) it runs after the netdev block above.
 		if !np.rdmaSharedMode && config.RDMADevice.LinkDev != "" {
 			if err := attachRdmaToNS(config.RDMADevice.LinkDev, ns, resourceClaimStatusDevice); err != nil {
+				np.eventRecorder.Eventf(podObjectRef(pod), v1.EventTypeWarning, "RDMADeviceAttachFailed",
+					"failed to attach RDMA device %s to pod %s/%s: %v", config.RDMADevice.LinkDev, pod.GetNamespace(), pod.GetName(), err)
 				return err
 			}
 		}
@@ -466,4 +471,14 @@ func getNetworkNamespace(pod *api.PodSandbox) string {
 
 func podKey(pod *api.PodSandbox) string {
 	return fmt.Sprintf("%s/%s", pod.GetNamespace(), pod.GetName())
+}
+
+// NRI gives us *api.PodSandbox while we need *v1.Pod for the Eventf.
+// As such, we construct the minimal *v1.Pod object reference needed for the event.
+func podObjectRef(pod *api.PodSandbox) *v1.Pod {
+	p := &v1.Pod{}
+	p.Name = pod.GetName()
+	p.Namespace = pod.GetNamespace()
+	p.UID = types.UID(pod.GetUid())
+	return p
 }
