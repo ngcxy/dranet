@@ -275,9 +275,15 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			deviceCfg.NetworkInterfaceConfigInPod.Interface.Name = ifName
 		}
 
-		// If DHCP is requested, do a DHCP request to gather the network parameters (IPs and Routes)
-		// ... but we DO NOT apply them in the root namespace
-		if deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP != nil && *deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP {
+		// POC: experimental IPAM takes over IP allocation logic when enabled.
+		const pocIpamEnabled = true
+		podIPs := make(map[types.UID]string)
+
+		if pocIpamEnabled {
+			var ipamErrors []error
+			podIPs, ipamErrors = np.allocateIPsForPods(netconf.Interface.IPRange, podUIDs, result.Device)
+			errorList = append(errorList, ipamErrors...)
+		} else if deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP != nil && *deviceCfg.NetworkInterfaceConfigInPod.Interface.DHCP {
 			klog.V(2).Infof("trying to get network configuration via DHCP")
 			contextCancel, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
@@ -398,6 +404,27 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 		// TODO: support for multiple pods sharing the same device
 		// we'll create the subinterface here
 		for _, uid := range podUIDs {
+				// POC: Add source-based routing rule for each pod
+				var tableID int
+				for _, r := range podDeviceCfg.NetworkInterfaceConfigInPod.Routes {
+					if r.Destination == "::/0" && r.Table != 0 {
+						tableID = r.Table
+						break
+					}
+				}
+				if tableID != 0 {
+					mask := "/128" // single IPv6 address
+					if strings.Contains(ip, ".") {
+						mask = "/32" // single IPv4 address
+					}
+					klog.V(2).Infof("POC: Adding source-based routing rule for pod IP %s pointing to table %d", ip, tableID)
+					podDeviceCfg.NetworkInterfaceConfigInPod.Rules = append(podDeviceCfg.NetworkInterfaceConfigInPod.Rules, apis.RuleConfig{
+						Source:   ip + mask,
+						Table:    tableID,
+						Priority: 32000,
+					})
+				}
+			}
 			if err := np.podConfigStore.SetDeviceConfig(uid, result.Device, deviceCfg); err != nil {
 				errorList = append(errorList, fmt.Errorf("failed to persist device config for pod %s device %s: %v", uid, result.Device, err))
 			}
@@ -412,6 +439,33 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 		}
 	}
 	return kubeletplugin.PrepareResult{}
+}
+
+// allocateIPsForPods allocates IPs for a list of pod UIDs from a given IP range.
+func (np *NetworkDriver) allocateIPsForPods(ipRange string, podUIDs []types.UID, deviceName string) (map[types.UID]string, []error) {
+	podIPs := make(map[types.UID]string)
+	var errorList []error
+
+	if ipRange == "" {
+		errorList = append(errorList, fmt.Errorf("POC: IP range is empty for device %s", deviceName))
+		return podIPs, errorList
+	}
+
+	dbPath := np.dbPath
+	if dbPath == "" {
+		dbPath = "ipconf.db"
+	}
+	for _, uid := range podUIDs {
+		ip, err := GetIPFromRange(ipRange, uid, dbPath)
+		if err != nil {
+			errorList = append(errorList, fmt.Errorf("POC: failed to allocate IP for pod %s: %v", uid, err))
+			continue
+		}
+		klog.V(2).Infof("POC: Successfully allocated IP %s for pod %s", ip.String(), uid)
+		podIPs[uid] = ip.String()
+	}
+
+	return podIPs, errorList
 }
 
 func (np *NetworkDriver) UnprepareResourceClaims(ctx context.Context, claims []kubeletplugin.NamespacedObject) (map[types.UID]error, error) {
