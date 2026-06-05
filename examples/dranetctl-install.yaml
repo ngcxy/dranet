@@ -130,6 +130,12 @@ spec:
         securityContext:
           capabilities:
             add: ["NET_ADMIN", "SYS_ADMIN"]
+        startupProbe:
+          httpGet:
+            path: /healthz
+            port: 9177
+          failureThreshold: 12
+          periodSeconds: 5
         readinessProbe:
           httpGet:
             path: /healthz
