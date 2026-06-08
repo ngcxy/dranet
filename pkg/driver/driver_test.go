@@ -46,8 +46,13 @@ func (m *fakePluginHelper) RegistrationStatus() *registerapi.RegistrationStatus 
 
 // mockNetDB is a mock implementation of the inventoryDB interface for testing.
 type fakeInventoryDB struct {
-	resources   chan []resourcev1.Device
-	rescanCalls atomic.Int32
+	resources           chan []resourcev1.Device
+	rescanCalls         atomic.Int32
+	GetDeviceConfigFunc func(deviceName string) (*apis.NetworkConfig, bool)
+	GetNetInterfaceNameFunc func(deviceName string) (string, error)
+	IsIBOnlyDeviceFunc      func(deviceName string) bool
+	GetProfileConfigFunc    func(deviceName, profile string, claimUID types.UID) (*apis.NetworkConfig, error)
+	ReleaseProfileConfigFunc func(deviceName, profile string, claimUID types.UID) error
 }
 
 func newFakeInventoryDB() *fakeInventoryDB {
@@ -62,18 +67,45 @@ func (m *fakeInventoryDB) GetResources(_ context.Context) <-chan []resourcev1.De
 	return m.resources
 }
 
-func (m *fakeInventoryDB) GetNetInterfaceName(_ string) (string, error) { return "", nil }
+func (m *fakeInventoryDB) GetNetInterfaceName(deviceName string) (string, error) {
+	if m.GetNetInterfaceNameFunc != nil {
+		return m.GetNetInterfaceNameFunc(deviceName)
+	}
+	return "", nil
+}
 
-func (m *fakeInventoryDB) IsIBOnlyDevice(_ string) bool { return false }
+func (m *fakeInventoryDB) IsIBOnlyDevice(deviceName string) bool {
+	if m.IsIBOnlyDeviceFunc != nil {
+		return m.IsIBOnlyDeviceFunc(deviceName)
+	}
+	return false
+}
 
 func (m *fakeInventoryDB) GetRDMADeviceName(_ string) (string, error) { return "", nil }
 
 func (m *fakeInventoryDB) GetDeviceConfig(deviceName string) (*apis.NetworkConfig, bool) {
+	if m.GetDeviceConfigFunc != nil {
+		return m.GetDeviceConfigFunc(deviceName)
+	}
 	return nil, false
 }
 
 func (m *fakeInventoryDB) RequestRescan() {
 	m.rescanCalls.Add(1)
+}
+
+func (m *fakeInventoryDB) GetProfileConfig(deviceName, profile string, claimUID types.UID) (*apis.NetworkConfig, error) {
+	if m.GetProfileConfigFunc != nil {
+		return m.GetProfileConfigFunc(deviceName, profile, claimUID)
+	}
+	return nil, nil
+}
+
+func (m *fakeInventoryDB) ReleaseProfileConfig(deviceName, profile string, claimUID types.UID) error {
+	if m.ReleaseProfileConfigFunc != nil {
+		return m.ReleaseProfileConfigFunc(deviceName, profile, claimUID)
+	}
+	return nil
 }
 
 // fakeNriStub is a mock implementation of the stub.Stub interface for testing.

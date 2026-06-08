@@ -313,3 +313,273 @@ func TestValidateVFMTU(t *testing.T) {
 		})
 	}
 }
+
+func TestDynamicProfiles(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Success Case", func(t *testing.T) {
+		fakeDB := newFakeInventoryDB()
+		fakeDB.GetProfileConfigFunc = func(deviceName, profile string, claimUID types.UID) (*apis.NetworkConfig, error) {
+			return &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{
+					Addresses: []string{"10.0.0.1/24"},
+				},
+			}, nil
+		}
+		fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+			return &apis.NetworkConfig{Profile: "my-profile"}, true
+		}
+		fakeDB.GetNetInterfaceNameFunc = func(deviceName string) (string, error) {
+			return "eth0", nil
+		}
+		fakeDB.IsIBOnlyDeviceFunc = func(deviceName string) bool {
+			return true
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claims := []*resourcev1.ResourceClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-1", Namespace: "default", Name: "claim1"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-1"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: "test.driver", Device: "device-1", Request: "req-1"},
+							},
+							Config: []resourcev1.DeviceAllocationConfiguration{},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := np.PrepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("PrepareResourceClaims failed: %v", err)
+		}
+		if res["claim-uid-1"].Err != nil {
+			t.Fatalf("Expected no error, got %v", res["claim-uid-1"].Err)
+		}
+
+		// Verify merge success
+		podCfg, ok := np.podConfigStore.GetPodConfig("pod-uid-1")
+		if !ok {
+			t.Fatalf("Expected pod config to be stored")
+		}
+		devCfg := podCfg.DeviceConfigs["device-1"]
+		if len(devCfg.NetworkInterfaceConfigInPod.Interface.Addresses) == 0 || devCfg.NetworkInterfaceConfigInPod.Interface.Addresses[0] != "10.0.0.1/24" {
+			t.Errorf("Expected address 10.0.0.1/24 to be merged into pod config, got %v", devCfg.NetworkInterfaceConfigInPod.Interface.Addresses)
+		}
+	})
+
+	t.Run("Unsupported Provider Case", func(t *testing.T) {
+		fakeDB := newFakeInventoryDB()
+		fakeDB.GetProfileConfigFunc = func(deviceName, profile string, claimUID types.UID) (*apis.NetworkConfig, error) {
+			return nil, fmt.Errorf("current cloud provider does not support dynamic profiles")
+		}
+		fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+			return &apis.NetworkConfig{Profile: "my-profile"}, true
+		}
+		fakeDB.GetNetInterfaceNameFunc = func(deviceName string) (string, error) {
+			return "eth0", nil
+		}
+		fakeDB.IsIBOnlyDeviceFunc = func(deviceName string) bool {
+			return true
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claims := []*resourcev1.ResourceClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-unsupported", Namespace: "default", Name: "claim-unsup"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-unsupported"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: "test.driver", Device: "device-1", Request: "req-1"},
+							},
+							Config: []resourcev1.DeviceAllocationConfiguration{},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := np.PrepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("PrepareResourceClaims failed: %v", err)
+		}
+		if res["claim-uid-unsupported"].Err == nil || !strings.Contains(res["claim-uid-unsupported"].Err.Error(), "does not support dynamic profiles") {
+			t.Fatalf("Expected unsupported profile error, got %v", res["claim-uid-unsupported"].Err)
+		}
+	})
+
+	t.Run("Allocation Failure Case", func(t *testing.T) {
+		fakeDB := newFakeInventoryDB()
+		fakeDB.GetProfileConfigFunc = func(deviceName, profile string, claimUID types.UID) (*apis.NetworkConfig, error) {
+			return nil, fmt.Errorf("ipam allocation failed")
+		}
+		fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+			return &apis.NetworkConfig{Profile: "my-profile"}, true
+		}
+		fakeDB.GetNetInterfaceNameFunc = func(deviceName string) (string, error) {
+			return "eth0", nil
+		}
+		fakeDB.IsIBOnlyDeviceFunc = func(deviceName string) bool {
+			return true
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claims := []*resourcev1.ResourceClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-fail", Namespace: "default", Name: "claim-fail"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-fail"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: "test.driver", Device: "device-1", Request: "req-1"},
+							},
+							Config: []resourcev1.DeviceAllocationConfiguration{},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := np.PrepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("PrepareResourceClaims failed: %v", err)
+		}
+		if res["claim-uid-fail"].Err == nil || !strings.Contains(res["claim-uid-fail"].Err.Error(), "ipam allocation failed") {
+			t.Fatalf("Expected ipam allocation failed error, got %v", res["claim-uid-fail"].Err)
+		}
+	})
+
+	t.Run("Teardown Success Case", func(t *testing.T) {
+		released := false
+		fakeDB := newFakeInventoryDB()
+		fakeDB.ReleaseProfileConfigFunc = func(deviceName, profile string, claimUID types.UID) error {
+			released = true
+			if profile != "my-profile" {
+				t.Errorf("Expected profile 'my-profile', got %v", profile)
+			}
+			if claimUID != "claim-uid-td" {
+				t.Errorf("Expected claimUID 'claim-uid-td', got %v", claimUID)
+			}
+			return nil
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claimName := types.NamespacedName{Namespace: "default", Name: "claim-td"}
+		// Inject a profile in pod config store
+		np.podConfigStore.SetDeviceConfig("pod-uid-td", "device-1", DeviceConfig{
+			Claim:                       claimName,
+			NetworkInterfaceConfigInPod: apis.NetworkConfig{Profile: "my-profile"},
+		})
+
+		claims := []kubeletplugin.NamespacedObject{
+			{NamespacedName: claimName, UID: "claim-uid-td"},
+		}
+
+		_, err := np.UnprepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("UnprepareResourceClaims failed: %v", err)
+		}
+
+		if !released {
+			t.Errorf("Expected releaseProfileConfigFunc to be called")
+		}
+	})
+
+	t.Run("Early Store Profile Release on Subsequent Failure", func(t *testing.T) {
+		fakeDB := newFakeInventoryDB()
+		fakeDB.GetProfileConfigFunc = func(deviceName, profile string, claimUID types.UID) (*apis.NetworkConfig, error) {
+			return &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{
+					Addresses: []string{"10.0.0.1/24"},
+				},
+			}, nil
+		}
+		fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+			return &apis.NetworkConfig{Profile: "my-profile"}, true
+		}
+		// Cause a failure AFTER GetProfileConfig
+		fakeDB.GetNetInterfaceNameFunc = func(deviceName string) (string, error) {
+			return "", fmt.Errorf("simulated failure getting interface name")
+		}
+		fakeDB.IsIBOnlyDeviceFunc = func(deviceName string) bool {
+			return false
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claims := []*resourcev1.ResourceClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-leak", Namespace: "default", Name: "claim-leak"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-leak"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: "test.driver", Device: "device-1", Request: "req-1"},
+							},
+							Config: []resourcev1.DeviceAllocationConfiguration{},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := np.PrepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("PrepareResourceClaims failed: %v", err)
+		}
+		if res["claim-uid-leak"].Err == nil || !strings.Contains(res["claim-uid-leak"].Err.Error(), "simulated failure") {
+			t.Fatalf("Expected simulated failure, got %v", res["claim-uid-leak"].Err)
+		}
+
+		// Verify the early device config was stored so Kubelet's call to UnprepareResourceClaims will clean it up
+		podCfg, ok := np.podConfigStore.GetPodConfig("pod-uid-leak")
+		if !ok {
+			t.Fatalf("Expected pod config to be stored early")
+		}
+		devCfg := podCfg.DeviceConfigs["device-1"]
+		if devCfg.NetworkInterfaceConfigInPod.Profile != "my-profile" {
+			t.Errorf("Expected profile 'my-profile' to be saved for cleanup, got '%v'", devCfg.NetworkInterfaceConfigInPod.Profile)
+		}
+	})
+}

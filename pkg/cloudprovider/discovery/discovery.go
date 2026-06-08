@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/dranet/pkg/cloudprovider/azure"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/gce"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/oke"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/webhook"
 )
 
 type CloudProviderHint string
@@ -35,11 +36,12 @@ const (
 	CloudProviderHintAWS     CloudProviderHint = "AWS"
 	CloudProviderHintAzure   CloudProviderHint = "AZURE"
 	CloudProviderHintOKE     CloudProviderHint = "OKE"
+	CloudProviderHintWebhook CloudProviderHint = "webhook"
 	CloudProviderHintNone    CloudProviderHint = "NONE"
 )
 
 // DiscoverCloudProvider probes the environment to detect which cloud provider DRANET is running on.
-func DiscoverCloudProvider(ctx context.Context) CloudProviderHint {
+func DiscoverCloudProvider(ctx context.Context, webhookURL string) CloudProviderHint {
 	if metadata.OnGCE() {
 		return CloudProviderHintGCE
 	}
@@ -52,11 +54,14 @@ func DiscoverCloudProvider(ctx context.Context) CloudProviderHint {
 	if oke.OnOKE(ctx) {
 		return CloudProviderHintOKE
 	}
+	if webhookURL != "" && webhook.OnWebhook(ctx, webhookURL) {
+		return CloudProviderHintWebhook
+	}
 	return CloudProviderHintNone
 }
 
 // GetInstanceProperties initializes and returns the specified cloud provider instance.
-func GetInstanceProperties(ctx context.Context, hint CloudProviderHint) (cloudprovider.CloudInstance, error) {
+func GetInstanceProperties(ctx context.Context, hint CloudProviderHint, webhookURL string) (cloudprovider.CloudInstance, error) {
 	switch hint {
 	case CloudProviderHintGCE:
 		return gce.GetInstance(ctx)
@@ -66,6 +71,11 @@ func GetInstanceProperties(ctx context.Context, hint CloudProviderHint) (cloudpr
 		return azure.GetInstance(ctx)
 	case CloudProviderHintOKE:
 		return oke.GetInstance(ctx)
+	case CloudProviderHintWebhook:
+		if webhookURL == "" {
+			return nil, fmt.Errorf("--webhook-url is required when using the webhook cloud provider")
+		}
+		return webhook.NewWebhookProvider(ctx, webhookURL)
 	case CloudProviderHintNone, "none", "":
 		return nil, nil
 	default:

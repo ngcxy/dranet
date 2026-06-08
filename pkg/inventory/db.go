@@ -35,6 +35,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"golang.org/x/time/rate"
 	resourceapi "k8s.io/api/resource/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/dynamic-resource-allocation/deviceattribute"
 	"k8s.io/klog/v2"
@@ -68,6 +69,7 @@ var (
 
 type DB struct {
 	instance cloudprovider.CloudInstance
+	profProv cloudprovider.ProfileProvider
 	// TODO: it is not common but may happen in edge cases that the default
 	// gateway changes revisit once we have more evidence this can be a
 	// potential problem or break some use cases.
@@ -123,9 +125,15 @@ func WithCloudInstance(instance cloudprovider.CloudInstance) Option {
 	}
 }
 
+func WithProfileProvider(profProv cloudprovider.ProfileProvider) Option {
+	return func(db *DB) {
+		db.profProv = profProv
+	}
+}
+
 func New(opts ...Option) *DB {
 	db := &DB{
-        
+
 		deviceStore:       map[string]resourceapi.Device{},
 		deviceConfigStore: map[string]*apis.NetworkConfig{},
 		rateLimiter:       rate.NewLimiter(rate.Every(defaultMinPollInterval), defaultPollBurst),
@@ -152,7 +160,6 @@ func (db *DB) Run(ctx context.Context) error {
 		klog.Error(err, "error subscribing to netlink interfaces, only syncing periodically", "interval", db.maxPollInterval.String())
 	}
 
-	// Obtain data that will not change after the startup
 	db.gwInterfaces = getExcludedUplinkInterfaces()
 	klog.V(2).Infof("Excluded uplink interfaces and children: %v", db.gwInterfaces.UnsortedList())
 
@@ -518,6 +525,30 @@ func (db *DB) addCloudAttributes(devices []resourceapi.Device) []resourceapi.Dev
 	return devices
 }
 
+func (db *DB) getProviderAttributes(device *resourceapi.Device, instance cloudprovider.CloudInstance) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute {
+	if instance == nil {
+		klog.Warningf("instance metadata is nil, cannot get provider attributes.")
+		return nil
+	}
+
+	if device == nil {
+		klog.Warningf("device is nil, cannot get provider attributes.")
+		return nil
+	}
+
+	id := cloudprovider.DeviceIdentifiers{
+		Name: device.Name,
+	}
+	if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
+		id.MAC = *macAttr.StringValue
+	}
+	if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
+		id.PCIAddress = *pciAttr.StringValue
+	}
+
+	return instance.GetDeviceAttributes(id)
+}
+
 func (db *DB) updateDeviceStore(devices []resourceapi.Device) {
 	deviceStore := map[string]resourceapi.Device{}
 	deviceConfigStore := map[string]*apis.NetworkConfig{}
@@ -553,6 +584,62 @@ func (db *DB) GetDevice(deviceName string) (resourceapi.Device, bool) {
 	defer db.mu.RUnlock()
 	device, exists := db.deviceStore[deviceName]
 	return device, exists
+}
+
+func (db *DB) getProfileProvider() cloudprovider.ProfileProvider {
+	return db.profProv
+}
+
+// GetProfileConfig resolves a dynamic profile by querying the underlying cloud provider.
+func (db *DB) GetProfileConfig(deviceName, profile string, claimUID types.UID) (*apis.NetworkConfig, error) {
+	p := db.getProfileProvider()
+	if p == nil {
+		return nil, fmt.Errorf("current cloud provider does not support dynamic profiles")
+	}
+
+	db.mu.RLock()
+	device, exists := db.deviceStore[deviceName]
+	db.mu.RUnlock()
+
+	if !exists {
+		return nil, fmt.Errorf("device %s not found in inventory", deviceName)
+	}
+
+	id := cloudprovider.DeviceIdentifiers{Name: deviceName}
+	if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
+		id.MAC = *macAttr.StringValue
+	}
+	if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
+		id.PCIAddress = *pciAttr.StringValue
+	}
+
+	return p.GetProfileConfig(id, profile, claimUID)
+}
+
+// ReleaseProfileConfig delegates the teardown of a dynamic profile to the cloud provider.
+func (db *DB) ReleaseProfileConfig(deviceName, profile string, claimUID types.UID) error {
+	p := db.getProfileProvider()
+	if p == nil {
+		return nil // Provider doesn't support profiles, nothing to release
+	}
+
+	db.mu.RLock()
+	device, exists := db.deviceStore[deviceName]
+	db.mu.RUnlock()
+
+	id := cloudprovider.DeviceIdentifiers{Name: deviceName}
+	if exists {
+		// Device might have been removed from the node during teardown,
+		// but we populate identifiers if we still have them to aid cleanup.
+		if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
+			id.MAC = *macAttr.StringValue
+		}
+		if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
+			id.PCIAddress = *pciAttr.StringValue
+		}
+	}
+
+	return p.ReleaseProfileConfig(id, profile, claimUID)
 }
 
 // GetDeviceConfig returns the network configuration associated with the device, if any.
@@ -657,27 +744,4 @@ func isAllocatableNetworkDevice(dev *ghw.PCIDevice) bool {
 	return !nonNetdevDrivers.Has(dev.Driver)
 }
 
-// getProviderAttributes retrieves cloud provider-specific attributes for a network interface
-func (db *DB) getProviderAttributes(device *resourceapi.Device, instance cloudprovider.CloudInstance) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute {
-	if instance == nil {
-		klog.Warningf("instance metadata is nil, cannot get provider attributes.")
-		return nil
-	}
-	if device == nil {
-		klog.Warningf("device is nil, cannot get provider attributes.")
-		return nil
-	}
 
-	id := cloudprovider.DeviceIdentifiers{
-		Name: device.Name,
-	}
-	// get the device identifiers from the device attributes
-	if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
-		id.MAC = *macAttr.StringValue
-	}
-	if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
-		id.PCIAddress = *pciAttr.StringValue
-	}
-
-	return instance.GetDeviceAttributes(id)
-}

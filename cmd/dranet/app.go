@@ -36,6 +36,7 @@ import (
 	"golang.org/x/time/rate"
 	"sigs.k8s.io/dranet/pkg/cloudprovider"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/discovery"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/webhook"
 	"sigs.k8s.io/dranet/pkg/driver"
 	"sigs.k8s.io/dranet/pkg/inventory"
 	"sigs.k8s.io/dranet/pkg/pcidb"
@@ -63,6 +64,8 @@ var (
 	pollBurst         int
 	moveIBInterfaces  bool
 	cloudProviderHint string
+	profileProvider   string
+	webhookURL        string
 
 	ready atomic.Bool
 )
@@ -77,7 +80,9 @@ func init() {
 	flag.DurationVar(&maxPollInterval, "inventory-max-poll-interval", 1*time.Minute, "The maximum interval between two consecutive polls of the inventory.")
 	flag.IntVar(&pollBurst, "inventory-poll-burst", 5, "The number of polls that can be run in a burst.")
 	flag.BoolVar(&moveIBInterfaces, "move-ib-interfaces", true, "If true, InfiniBand (IPoIB) network interfaces associated with PCI devices are moved into pod network namespace. If false, moving IB network interfaces are skipped and the underlying device is exposed as an IB-only RDMA device.")
-	flag.StringVar(&cloudProviderHint, "cloud-provider-hint", "", "Hint for the cloud provider that will be used to select the appropriate provider plugin. Supported values: (AWS, GCE, AZURE, OKE, NONE). If left unset, the cloud provider is auto-detected (which may delay startup) and defaults to 'NONE' if detection fails.")
+	flag.StringVar(&cloudProviderHint, "cloud-provider-hint", "", "Hint for the cloud provider that will be used to select the appropriate provider plugin. Supported values: (AWS, GCE, AZURE, OKE, webhook, NONE). If left unset, the cloud provider is auto-detected.")
+	flag.StringVar(&profileProvider, "profile-provider", "cloud", "Provides user intent (cloud, webhook, none). 'cloud' falls back to the cloud-provider's native implementation.")
+	flag.StringVar(&webhookURL, "webhook-url", "", "URL for the webhook provider (required if using webhook for either provider)")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, "Usage: dranet [options]\n\n")
@@ -174,24 +179,66 @@ func main() {
 		opts = append(opts, driver.WithFilter(prg))
 	}
 	var cloudInst cloudprovider.CloudInstance
+	var profProv cloudprovider.ProfileProvider
+
 	var hint discovery.CloudProviderHint
+	// Auto-discover cloud provider if not explicitly set
 	if cloudProviderHint == "" {
-		hint = discovery.DiscoverCloudProvider(ctx)
+		hint = discovery.DiscoverCloudProvider(ctx, webhookURL)
 	} else {
 		hint = discovery.CloudProviderHint(cloudProviderHint)
 	}
-	cloudInst, err = discovery.GetInstanceProperties(ctx, hint)
+
+	// Setup the Underlay (Hardware Discovery / Cloud Instance Info)
+	cloudInst, err = discovery.GetInstanceProperties(ctx, hint, webhookURL)
 	if err != nil {
 		klog.Infof("failed to initialize cloud provider %q: %v", hint, err)
 		cloudInst = nil
 	}
 
-	db := inventory.New(
+	// Setup the Overlay (Profile Provider / User Intent)
+	switch profileProvider {
+	case "cloud":
+		if p, ok := cloudInst.(cloudprovider.ProfileProvider); ok {
+			profProv = p
+		} else {
+			profProv = nil
+		}
+	case "webhook":
+		if webhookURL == "" {
+			klog.Fatalf("--webhook-url is required when using the webhook profile provider")
+		}
+		var wh *webhook.WebhookProvider
+		if existing, ok := cloudInst.(*webhook.WebhookProvider); ok {
+			wh = existing
+		} else {
+			var err error
+			wh, err = webhook.NewWebhookProvider(ctx, webhookURL)
+			if err != nil {
+				klog.Fatalf("failed to initialize webhook profile provider: %v", err)
+			}
+		}
+		profProv = wh
+	case "none":
+		profProv = nil
+	default:
+		klog.Fatalf("unsupported profile provider: %s", profileProvider)
+	}
+
+	optsDb := []inventory.Option{
 		inventory.WithRateLimiter(rate.NewLimiter(rate.Every(minPollInterval), pollBurst)),
 		inventory.WithMaxPollInterval(maxPollInterval),
 		inventory.WithMoveIBInterfaces(moveIBInterfaces),
-		inventory.WithCloudInstance(cloudInst),
-	)
+	}
+
+	if cloudInst != nil {
+		optsDb = append(optsDb, inventory.WithCloudInstance(cloudInst))
+	}
+	if profProv != nil {
+		optsDb = append(optsDb, inventory.WithProfileProvider(profProv))
+	}
+
+	db := inventory.New(optsDb...)
 	opts = append(opts, driver.WithInventory(db))
 	dranet, err := driver.Start(ctx, driverName, clientset, nodeName, opts...)
 	if err != nil {

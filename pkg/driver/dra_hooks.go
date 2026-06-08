@@ -220,6 +220,16 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			klog.V(4).Infof("Found cloud provider configuration for device %s: %#v", result.Device, cloudConf)
 		}
 		mergedConf := apis.MergeNetworkConfig(userConf, cloudConf)
+
+		if mergedConf.Profile != "" {
+			profileConf, err := np.netdb.GetProfileConfig(result.Device, mergedConf.Profile, claim.UID)
+			if err != nil {
+				errorList = append(errorList, fmt.Errorf("failed to get profile config: %v", err))
+				continue
+			}
+			mergedConf = apis.MergeNetworkConfig(mergedConf, profileConf)
+		}
+
 		netconf := *mergedConf
 
 		klog.V(4).Infof("PrepareResourceClaim %s/%s final Configuration %#v", claim.Namespace, claim.Name, netconf)
@@ -229,6 +239,20 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 				Name:      claim.Name,
 			},
 			NetworkInterfaceConfigInPod: netconf,
+		}
+
+		// Store early to guarantee profile cleanup on subsequent failures within this loop.
+		// If the preparation fails later, Kubelet will call UnprepareResourceClaims,
+		// which will find this early config and release the allocated profile.
+		if netconf.Profile != "" {
+			if err := np.podConfigStore.SetDeviceConfig(podUID, result.Device, deviceCfg); err != nil {
+				errorList = append(errorList, fmt.Errorf("failed to persist early device config for pod %s device %s: %v", podUID, result.Device, err))
+				// If we can't store it, we MUST release it immediately to prevent a leak.
+				if relErr := np.netdb.ReleaseProfileConfig(result.Device, netconf.Profile, claim.UID); relErr != nil {
+					klog.Errorf("failed to rollback profile config for claim %v device %v: %v", claim.UID, result.Device, relErr)
+				}
+				continue
+			}
 		}
 
 		// IB-only path: device has RDMA capability but no netdev interface.
@@ -479,6 +503,22 @@ func (np *NetworkDriver) unprepareResourceClaims(ctx context.Context, claims []k
 }
 
 func (np *NetworkDriver) unprepareResourceClaim(_ context.Context, claim kubeletplugin.NamespacedObject) error {
+	for _, podUID := range np.podConfigStore.ListPods() {
+		podCfg, ok := np.podConfigStore.GetPodConfig(podUID)
+		if !ok {
+			continue
+		}
+		for deviceName, devCfg := range podCfg.DeviceConfigs {
+			if devCfg.Claim.Namespace == claim.Namespace && devCfg.Claim.Name == claim.Name {
+				if devCfg.NetworkInterfaceConfigInPod.Profile != "" {
+					if err := np.netdb.ReleaseProfileConfig(deviceName, devCfg.NetworkInterfaceConfigInPod.Profile, claim.UID); err != nil {
+						klog.Errorf("failed to release profile config for claim %v: %v", claim.NamespacedName, err)
+					}
+				}
+			}
+		}
+	}
+
 	np.podConfigStore.DeleteClaim(claim.NamespacedName)
 	return nil
 }
