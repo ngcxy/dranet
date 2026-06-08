@@ -22,12 +22,17 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/jaypipes/ghw"
 	"github.com/vishvananda/netlink"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/cloudprovider"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/gce"
 
 	userns "sigs.k8s.io/dranet/internal/testutils"
 )
@@ -454,6 +459,108 @@ func TestBuildIPList(t *testing.T) {
 			}
 			if len(got) > tc.maxBytes && tc.maxBytes > 0 {
 				t.Errorf("buildIPList result length %d exceeds maxBytes %d", len(got), tc.maxBytes)
+			}
+		})
+	}
+}
+// mockCloudInstance implements cloudprovider.CloudInstance for testing
+type mockCloudInstance struct {
+	deviceAttributes map[string]map[resourceapi.QualifiedName]resourceapi.DeviceAttribute
+}
+
+func (m *mockCloudInstance) GetDeviceAttributes(id cloudprovider.DeviceIdentifiers) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute {
+	// For testing, we primarily look up by MAC if present, similar to the GCE implementation for now
+	if id.MAC != "" {
+		return m.deviceAttributes[id.MAC]
+	}
+	// We could extend this to look up by Name or PCIAddress if tests require it
+	return nil
+}
+
+func (m *mockCloudInstance) GetDeviceConfig(id cloudprovider.DeviceIdentifiers) *apis.NetworkConfig {
+	return nil
+}
+
+func TestGetProviderAttributes(t *testing.T) {
+	tests := []struct {
+		name     string
+		device   *resourceapi.Device
+		instance cloudprovider.CloudInstance
+		want     map[resourceapi.QualifiedName]resourceapi.DeviceAttribute
+	}{
+		{
+			name:     "nil instance",
+			device:   &resourceapi.Device{Name: "dev1"},
+			instance: nil,
+			want:     nil,
+		},
+		{
+			name:     "nil device",
+			device:   nil,
+			instance: &mockCloudInstance{},
+			want:     nil,
+		},
+		{
+			name: "instance with no matching MAC",
+			device: &resourceapi.Device{
+				Name: "dev1",
+				Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					apis.AttrMac: {StringValue: ptr.To("00:11:22:33:44:FF")},
+				},
+			},
+			instance: &mockCloudInstance{
+				deviceAttributes: map[string]map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					"00:11:22:33:44:55": {
+						gce.AttrGCEMachineType: {StringValue: ptr.To("machine-type-a")},
+					},
+				},
+			},
+			want: nil,
+		},
+		{
+			name: "MAC found",
+			device: &resourceapi.Device{
+				Name: "dev1",
+				Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					apis.AttrMac: {StringValue: ptr.To("00:11:22:33:44:55")},
+				},
+			},
+			instance: &mockCloudInstance{
+				deviceAttributes: map[string]map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					"00:11:22:33:44:55": {
+						gce.AttrGCENetworkName: {StringValue: ptr.To("test-network")},
+						gce.AttrGCEMachineType: {StringValue: ptr.To("machine-type-a")},
+					},
+				},
+			},
+			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+				gce.AttrGCENetworkName: {StringValue: ptr.To("test-network")},
+				gce.AttrGCEMachineType: {StringValue: ptr.To("machine-type-a")},
+			},
+		},
+		{
+			name: "Device Name used (future proofing)",
+			device: &resourceapi.Device{
+				Name: "dev-pci-1", // PCI device without MAC
+				Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					apis.AttrPCIAddress: {StringValue: ptr.To("0000:00:01.0")},
+				},
+			},
+			instance: &mockCloudInstance{
+				// Mock implementation currently only checks MAC, so this returns nil
+				// This test case ensures we can pass non-MAC devices without crashing
+				deviceAttributes: map[string]map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{},
+			},
+			want: nil,
+		},
+	}
+
+	db := &DB{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := db.getProviderAttributes(tt.device, tt.instance)
+			if diff := cmp.Diff(tt.want, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("getProviderAttributes() returned unexpected diff (-want, +got):\n%s", diff)
 			}
 		})
 	}

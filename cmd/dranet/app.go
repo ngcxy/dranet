@@ -34,6 +34,8 @@ import (
 	"github.com/google/cel-go/ext"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/time/rate"
+	"sigs.k8s.io/dranet/pkg/cloudprovider"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/discovery"
 	"sigs.k8s.io/dranet/pkg/driver"
 	"sigs.k8s.io/dranet/pkg/inventory"
 	"sigs.k8s.io/dranet/pkg/pcidb"
@@ -171,11 +173,24 @@ func main() {
 		}
 		opts = append(opts, driver.WithFilter(prg))
 	}
+	var cloudInst cloudprovider.CloudInstance
+	var hint discovery.CloudProviderHint
+	if cloudProviderHint == "" {
+		hint = discovery.DiscoverCloudProvider(ctx)
+	} else {
+		hint = discovery.CloudProviderHint(cloudProviderHint)
+	}
+	cloudInst, err = discovery.GetInstanceProperties(ctx, hint)
+	if err != nil {
+		klog.Infof("failed to initialize cloud provider %q: %v", hint, err)
+		cloudInst = nil
+	}
+
 	db := inventory.New(
 		inventory.WithRateLimiter(rate.NewLimiter(rate.Every(minPollInterval), pollBurst)),
 		inventory.WithMaxPollInterval(maxPollInterval),
 		inventory.WithMoveIBInterfaces(moveIBInterfaces),
-		inventory.WithCloudProviderHint(cloudProviderHint),
+		inventory.WithCloudInstance(cloudInst),
 	)
 	opts = append(opts, driver.WithInventory(db))
 	dranet, err := driver.Start(ctx, driverName, clientset, nodeName, opts...)
