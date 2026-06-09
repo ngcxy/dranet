@@ -178,51 +178,9 @@ func main() {
 		}
 		opts = append(opts, driver.WithFilter(prg))
 	}
-	var cloudInst cloudprovider.CloudInstance
-	var profProv cloudprovider.ProfileProvider
-
-	var hint discovery.CloudProviderHint
-	// Auto-discover cloud provider if not explicitly set
-	if cloudProviderHint == "" {
-		hint = discovery.DiscoverCloudProvider(ctx, webhookURL)
-	} else {
-		hint = discovery.CloudProviderHint(cloudProviderHint)
-	}
-
-	// Setup the Underlay (Hardware Discovery / Cloud Instance Info)
-	cloudInst, err = discovery.GetInstanceProperties(ctx, hint, webhookURL)
+	cloudInst, profProv, err := setupProviders(ctx, cloudProviderHint, profileProvider, webhookURL)
 	if err != nil {
-		klog.Infof("failed to initialize cloud provider %q: %v", hint, err)
-		cloudInst = nil
-	}
-
-	// Setup the Overlay (Profile Provider / User Intent)
-	switch profileProvider {
-	case "cloud":
-		if p, ok := cloudInst.(cloudprovider.ProfileProvider); ok {
-			profProv = p
-		} else {
-			profProv = nil
-		}
-	case "webhook":
-		if webhookURL == "" {
-			klog.Fatalf("--webhook-url is required when using the webhook profile provider")
-		}
-		var wh *webhook.WebhookProvider
-		if existing, ok := cloudInst.(*webhook.WebhookProvider); ok {
-			wh = existing
-		} else {
-			var err error
-			wh, err = webhook.NewWebhookProvider(ctx, webhookURL)
-			if err != nil {
-				klog.Fatalf("failed to initialize webhook profile provider: %v", err)
-			}
-		}
-		profProv = wh
-	case "none":
-		profProv = nil
-	default:
-		klog.Fatalf("unsupported profile provider: %s", profileProvider)
+		klog.Fatalf("failed to setup providers: %v", err)
 	}
 
 	optsDb := []inventory.Option{
@@ -272,4 +230,59 @@ func printVersion() {
 		}
 	}
 	klog.Infof("dranet go %s build: %s time: %s", info.GoVersion, vcsRevision, vcsTime)
+}
+
+func setupProviders(ctx context.Context, cloudProviderHint string, profileProvider string, webhookURL string) (cloudprovider.CloudInstance, cloudprovider.ProfileProvider, error) {
+	var cloudInst cloudprovider.CloudInstance
+	var profProv cloudprovider.ProfileProvider
+	var err error
+
+	var hint discovery.CloudProviderHint
+	// Auto-discover cloud provider if not explicitly set
+	if cloudProviderHint == "" {
+		hint = discovery.DiscoverCloudProvider(ctx, webhookURL)
+	} else {
+		hint = discovery.CloudProviderHint(cloudProviderHint)
+	}
+
+	// Setup the Underlay (Hardware Discovery / Cloud Instance Info)
+	cloudInst, err = discovery.GetInstanceProperties(ctx, hint, webhookURL)
+	if err != nil {
+		klog.Infof("failed to initialize cloud provider %q: %v", hint, err)
+		cloudInst = nil
+	}
+
+	// Setup the Overlay (Profile Provider / User Intent)
+	switch profileProvider {
+	case "cloud":
+		if p, ok := cloudInst.(cloudprovider.ProfileProvider); ok {
+			profProv = p
+		} else {
+			profProv = nil
+		}
+	case "webhook":
+		if webhookURL == "" {
+			return nil, nil, fmt.Errorf("--webhook-url is required when using the webhook profile provider")
+		}
+		var wh *webhook.WebhookProvider
+		if existing, ok := cloudInst.(*webhook.WebhookProvider); ok {
+			wh = existing
+		} else {
+			wh, err = webhook.NewWebhookProvider(ctx, webhookURL)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to initialize webhook profile provider: %v", err)
+			}
+		}
+
+		if !wh.HasProfileProvider() {
+			return nil, nil, fmt.Errorf("webhook at %q does not support ProfileProvider capability", webhookURL)
+		}
+		profProv = wh
+	case "none":
+		profProv = nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported profile provider: %s", profileProvider)
+	}
+
+	return cloudInst, profProv, nil
 }

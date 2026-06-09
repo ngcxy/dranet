@@ -75,7 +75,14 @@ func GetInstanceProperties(ctx context.Context, hint CloudProviderHint, webhookU
 		if webhookURL == "" {
 			return nil, fmt.Errorf("--webhook-url is required when using the webhook cloud provider")
 		}
-		return webhook.NewWebhookProvider(ctx, webhookURL)
+		p, err := webhook.NewWebhookProvider(ctx, webhookURL)
+		if err != nil {
+			return nil, err
+		}
+		if !p.HasCloudProvider() {
+			return nil, nil
+		}
+		return p, nil
 	case CloudProviderHintNone, "none", "":
 		return nil, nil
 	default:

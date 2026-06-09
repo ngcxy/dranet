@@ -63,14 +63,21 @@ type WebhookProvider struct {
 	caps    Capabilities
 }
 
-// OnWebhook tries to reach the webhook server to determine if it is available.
-func OnWebhook(ctx context.Context, endpoint string) bool {
+func (p *WebhookProvider) HasCloudProvider() bool {
+	return p.caps.CloudProvider
+}
+
+func (p *WebhookProvider) HasProfileProvider() bool {
+	return p.caps.ProfileProvider
+}
+
+func newWebhookClient(endpoint string) (*http.Client, *url.URL, error) {
 	if endpoint == "" {
-		return false
+		return nil, nil, fmt.Errorf("webhook endpoint is empty")
 	}
 	u, err := url.Parse(endpoint)
 	if err != nil {
-		return false
+		return nil, nil, fmt.Errorf("invalid webhook URL: %w", err)
 	}
 
 	transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -85,8 +92,18 @@ func OnWebhook(ctx context.Context, endpoint string) bool {
 
 	client := &http.Client{
 		Transport: transport,
-		Timeout:   5 * time.Second,
 	}
+	return client, u, nil
+}
+
+// OnWebhook tries to reach the webhook server to determine if it is available.
+func OnWebhook(ctx context.Context, endpoint string) bool {
+	client, u, err := newWebhookClient(endpoint)
+	if err != nil {
+		return false
+	}
+	client.Timeout = 5 * time.Second
+
 	reqURL := u.JoinPath(PathHealth).String()
 
 	err = wait.PollUntilContextTimeout(ctx, 1*time.Second, 5*time.Second, true, func(ctx context.Context) (done bool, err error) {
@@ -113,44 +130,38 @@ var _ cloudprovider.ProfileProvider = &WebhookProvider{}
 
 // NewWebhookProvider initializes the HTTP client and fetches capabilities.
 func NewWebhookProvider(ctx context.Context, endpoint string) (*WebhookProvider, error) {
-	u, err := url.Parse(endpoint)
+	client, u, err := newWebhookClient(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("invalid webhook URL: %v", err)
+		return nil, err
 	}
-
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if u.Scheme == "unix" {
-		socketPath := u.Path
-		transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-			var d net.Dialer
-			return d.DialContext(ctx, "unix", socketPath)
-		}
-		u, _ = url.Parse("http://localhost")
-	}
+	client.Timeout = 10 * time.Second
 
 	p := &WebhookProvider{
 		baseURL: u,
-		client: &http.Client{
-			Transport: transport,
-			Timeout:   10 * time.Second,
-		},
+		client:  client,
 	}
 
 	reqURL := p.baseURL.JoinPath(PathHealth).String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err == nil {
-		if resp, err := p.client.Do(req); err == nil {
-			defer resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				var caps Capabilities
-				if err := json.NewDecoder(resp.Body).Decode(&caps); err == nil {
-					p.caps = caps
-				} else {
-					p.caps = Capabilities{CloudProvider: true, ProfileProvider: true}
-				}
-			}
-		}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create health request: %w", err)
 	}
+
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach webhook health endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("webhook health endpoint returned status %d", resp.StatusCode)
+	}
+
+	var caps Capabilities
+	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
+		return nil, fmt.Errorf("webhook capabilities decoding failed: %w", err)
+	}
+	p.caps = caps
 
 	return p, nil
 }
