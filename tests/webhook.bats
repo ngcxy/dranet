@@ -44,7 +44,7 @@ teardown_file() {
   kubectl rollout status daemonset/dranet -n kube-system --timeout=120s
   
   for node in $(kind get nodes --name dranet-test-cluster); do
-    docker exec "$node" bash -c "killall webhook-whereabouts || true"
+    docker exec "$node" bash -c "pkill -f webhook-whereabouts || true"
   done
   
   kubectl delete -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/daemonset-install.yaml || true

@@ -247,3 +247,41 @@ func TestNewWebhookProviderInit(t *testing.T) {
 		})
 	}
 }
+
+func TestWebhookGetDeviceAttributesSerialization(t *testing.T) {
+	ctx := context.Background()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == PathHealth {
+			json.NewEncoder(w).Encode(Capabilities{CloudProvider: true, ProfileProvider: true})
+			return
+		}
+		if r.URL.Path == PathGetDeviceAttributes {
+			w.WriteHeader(http.StatusOK)
+			// Return a JSON with the exact "string" key format expected by k8s.io/api/resource/v1
+			w.Write([]byte(`{"dra.net/webhook_attr": {"string": "python"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	provider, err := NewWebhookProvider(ctx, srv.URL)
+	if err != nil {
+		t.Fatalf("NewWebhookProvider failed: %v", err)
+	}
+
+	attrs := provider.GetDeviceAttributes(cloudprovider.DeviceIdentifiers{})
+	if attrs == nil {
+		t.Fatalf("Expected attributes to be returned, got nil")
+	}
+
+	attr, ok := attrs["dra.net/webhook_attr"]
+	if !ok {
+		t.Fatalf("Expected key 'dra.net/webhook_attr' not found in attributes")
+	}
+
+	if attr.StringValue == nil || *attr.StringValue != "python" {
+		t.Errorf("Expected string value 'python', got %v", attr.StringValue)
+	}
+}

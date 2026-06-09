@@ -27,29 +27,39 @@ class WebhookHandler(BaseHTTPRequestHandler):
         post_data = self.rfile.read(content_length)
         logging.info("Body: %s", post_data.decode('utf-8'))
 
+        try:
+            req_json = json.loads(post_data.decode('utf-8'))
+        except Exception:
+            req_json = {}
+
         if self.path == '/GetDeviceConfig':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             
-            # Cloud intent sets the MTU
-            resp = {
-                "interface": {
-                    "mtu": 1450
+            # Cloud intent sets the MTU only for dummy1
+            resp = {}
+            if req_json.get("name") == "dummy1":
+                resp = {
+                    "interface": {
+                        "mtu": 1450
+                    }
                 }
-            }
             self.wfile.write(json.dumps(resp).encode('utf-8'))
         elif self.path == '/GetProfileConfig':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             
-            # User intent profile sets the address
-            resp = {
-                "interface": {
-                    "addresses": ["10.200.200.200/24"]
+            # User intent profile sets the address for python-profile
+            resp = {}
+            profile_name = req_json.get("profile")
+            if profile_name == "python-profile":
+                resp = {
+                    "interface": {
+                        "addresses": ["10.200.200.200/24"]
+                    }
                 }
-            }
             self.wfile.write(json.dumps(resp).encode('utf-8'))
         elif self.path == '/ReleaseProfileConfig':
             self.send_response(200)
@@ -60,8 +70,12 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
-            # Python web hook expose some custom attribute
-            self.wfile.write(json.dumps({"dra.net/webhook-attr": {"stringValue": "python"}}).encode('utf-8'))
+            
+            # Python web hook expose some custom attribute only for dummy1
+            resp = {}
+            if req_json.get("name") == "dummy1":
+                resp = {"dra.net/webhook_attr": {"string": "python"}}
+            self.wfile.write(json.dumps(resp).encode('utf-8'))
         else:
             self.send_response(404)
             self.end_headers()

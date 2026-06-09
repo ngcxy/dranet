@@ -11,7 +11,12 @@ spec:
           deviceClassName: dra.net
           selectors:
           - cel:
-              expression: has(device.attributes["dra.net"]["webhook-attr"]) && device.attributes["dra.net"]["webhook-attr"].string == "python" && has(device.attributes["dra.net"].ifName) && device.attributes["dra.net"].ifName == "dummy1"
+              expression: has(device.attributes["dra.net"].webhook_attr) && device.attributes["dra.net"].webhook_attr == "python" && has(device.attributes["dra.net"].ifName) && device.attributes["dra.net"].ifName == "dummy1"
+      config:
+      - opaque:
+          driver: dra.net
+          parameters:
+            profile: "python-profile"
 ---
 apiVersion: v1
 kind: Pod

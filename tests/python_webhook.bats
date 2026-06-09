@@ -54,9 +54,24 @@ teardown_file() {
   kubectl --context kind-dranet-test-cluster apply -f "$BATS_TEST_DIRNAME"/../tests/manifests/deviceclass.yaml
 
   # Wait for the interface to be discovered and validate the custom attribute from webhook
-  sleep 5
-  run kubectl --context kind-dranet-test-cluster get resourceslices --field-selector spec.nodeName="$NODE_NAME" -o jsonpath='{.items[0].spec.devices[?(@.name=="dummy1")].attributes.dra\.net\/webhook-attr.string}'
-  assert_success
+  local max_retries=15
+  local i=0
+  local attr_val=""
+  while [ $i -lt $max_retries ]; do
+    attr_val=$(kubectl --context kind-dranet-test-cluster get resourceslices --field-selector spec.nodeName="$NODE_NAME" -o jsonpath='{.items[0].spec.devices[?(@.name=="dummy1")].attributes.dra\.net\/webhook_attr.string}' || true)
+    if [[ "$attr_val" == "python" ]]; then
+      break
+    fi
+    sleep 2
+    i=$((i+1))
+  done
+  
+  if [[ "$attr_val" != "python" ]]; then
+    echo "ResourceSlice was not updated with python attribute after $max_retries retries!" >&3
+    kubectl --context kind-dranet-test-cluster get resourceslices --field-selector spec.nodeName="$NODE_NAME" -o yaml >&3
+  fi
+  
+  run echo "$attr_val"
   assert_output "python"
 
   # Create a pod requesting the device
