@@ -5,22 +5,16 @@ load 'test_helper/bats-assert/load'
 
 setup_file() {
   export BATS_TEST_TIMEOUT=300
-  kubectl apply -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/daemonset-install.yaml -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/whereabouts.cni.cncf.io_ippools.yaml -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/whereabouts.cni.cncf.io_overlappingrangeipreservations.yaml
-  
+  kubectl apply -f "$BATS_TEST_DIRNAME"/../tests/manifests/whereabouts_upstream.yaml
   kubectl -n kube-system wait --for=condition=ready pods -l app=whereabouts --timeout=120s
 
-	# write CNI config to kind nodes
-	for node in $(kind get nodes --name dranet-test-cluster); do
-		docker cp "$BATS_TEST_DIRNAME"/../tests/manifests/90-dranet-whereabouts.conf "$node":/etc/cni/net.d/90-dranet-whereabouts.conf
-	done
+	# Build and load webhook image
+	docker build --load -t dranet/webhook-whereabouts:test -f "$BATS_TEST_DIRNAME"/../cmd/webhook-whereabouts/Dockerfile "$BATS_TEST_DIRNAME"/../
+	kind load docker-image dranet/webhook-whereabouts:test --name dranet-test-cluster
 
-	# Build webhook
-	(cd "$BATS_TEST_DIRNAME"/../cmd/webhook-whereabouts && go build -o /tmp/webhook-whereabouts .)
-
-	for node in $(kind get nodes --name dranet-test-cluster); do
-		docker cp /tmp/webhook-whereabouts "$node":/usr/local/bin/webhook-whereabouts
-		docker exec -d "$node" bash -c "nohup /usr/local/bin/webhook-whereabouts --bind-address=127.0.0.1:8080 > /var/log/webhook-whereabouts.log 2>&1 &"
-	done
+	# Deploy whereabouts webhook daemonset and configmap
+	kubectl apply -f "$BATS_TEST_DIRNAME"/../tests/manifests/whereabouts_webhook_daemonset.yaml
+	kubectl -n kube-system wait --for=condition=ready pods -l app=whereabouts-webhook --timeout=120s
 
   kubectl patch daemonset dranet -n kube-system --type=json -p='[
     {"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--profile-provider=webhook"},
@@ -43,11 +37,9 @@ teardown_file() {
   ]' || true
   kubectl rollout status daemonset/dranet -n kube-system --timeout=120s
   
-  for node in $(kind get nodes --name dranet-test-cluster); do
-    docker exec "$node" bash -c "pkill -f webhook-whereabouts || true"
-  done
+  kubectl delete -f "$BATS_TEST_DIRNAME"/../tests/manifests/whereabouts_webhook_daemonset.yaml || true
   
-  kubectl delete -f https://raw.githubusercontent.com/k8snetworkplumbingwg/whereabouts/master/doc/crds/daemonset-install.yaml || true
+  kubectl delete -f "$BATS_TEST_DIRNAME"/../tests/manifests/whereabouts_upstream.yaml || true
 }
 
 @test "validate whereabouts cni integration" {
