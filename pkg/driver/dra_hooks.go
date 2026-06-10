@@ -213,21 +213,10 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			}
 		}
 
-		// Get network configuration from the cloud provider (if any) and merge it with the user configuration.
-		// User configuration always takes precedence in case of conflicts.
-		cloudConf, ok := np.netdb.GetDeviceConfig(result.Device)
-		if ok && cloudConf != nil {
-			klog.V(4).Infof("Found cloud provider configuration for device %s: %#v", result.Device, cloudConf)
-		}
-		mergedConf := apis.MergeNetworkConfig(userConf, cloudConf)
-
-		if mergedConf.Profile != "" {
-			profileConf, err := np.netdb.GetProfileConfig(result.Device, claim.UID, mergedConf)
-			if err != nil {
-				errorList = append(errorList, fmt.Errorf("failed to get profile config: %v", err))
-				continue
-			}
-			mergedConf = apis.MergeNetworkConfig(mergedConf, profileConf)
+		mergedConf, err := np.getDeviceNetworkConfig(result.Device, claim.UID, userConf)
+		if err != nil {
+			errorList = append(errorList, err)
+			continue
 		}
 
 		netconf := *mergedConf
@@ -658,4 +647,23 @@ func getRouteInfo(nlHandle nlwrap.Handle, ifName string, link netlink.Link) ([]a
 		}
 	}
 	return routes, tables, nil
+}
+
+// getDeviceNetworkConfig merges the user configuration with the cloud provider configuration and resolves the dynamic profile.
+// User configuration always takes precedence in case of conflicts.
+func (np *NetworkDriver) getDeviceNetworkConfig(device string, claimUID types.UID, userConf *apis.NetworkConfig) (*apis.NetworkConfig, error) {
+	cloudConf, ok := np.netdb.GetDeviceConfig(device)
+	if ok && cloudConf != nil {
+		klog.V(4).Infof("Found cloud provider configuration for device %s: %#v", device, cloudConf)
+	}
+	mergedConf := apis.MergeNetworkConfig(userConf, cloudConf)
+
+	if mergedConf.Profile != "" {
+		profileConf, err := np.netdb.GetProfileConfig(device, claimUID, mergedConf)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get profile config: %v", err)
+		}
+		mergedConf = apis.MergeNetworkConfig(mergedConf, profileConf)
+	}
+	return mergedConf, nil
 }
