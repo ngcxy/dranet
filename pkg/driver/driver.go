@@ -25,6 +25,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"sigs.k8s.io/dranet/pkg/apis"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/dranet/pkg/inventory"
 
 	"github.com/containerd/nri/pkg/stub"
@@ -65,6 +66,8 @@ type inventoryDB interface {
 	GetRDMADeviceName(deviceName string) (string, error)
 	GetDeviceConfig(deviceName string) (*apis.NetworkConfig, bool)
 	RequestRescan()
+	GetProfileConfig(deviceName string, claimUID types.UID, config *apis.NetworkConfig) (*apis.NetworkConfig, error)
+	ReleaseProfileConfig(deviceName string, claimUID types.UID, config *apis.NetworkConfig) error
 }
 
 // WithFilter

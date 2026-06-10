@@ -213,13 +213,12 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			}
 		}
 
-		// Get network configuration from the cloud provider (if any) and merge it with the user configuration.
-		// User configuration always takes precedence in case of conflicts.
-		cloudConf, ok := np.netdb.GetDeviceConfig(result.Device)
-		if ok && cloudConf != nil {
-			klog.V(4).Infof("Found cloud provider configuration for device %s: %#v", result.Device, cloudConf)
+		mergedConf, err := np.getDeviceNetworkConfig(result.Device, claim.UID, userConf)
+		if err != nil {
+			errorList = append(errorList, err)
+			continue
 		}
-		mergedConf := apis.MergeNetworkConfig(userConf, cloudConf)
+
 		netconf := *mergedConf
 
 		klog.V(4).Infof("PrepareResourceClaim %s/%s final Configuration %#v", claim.Namespace, claim.Name, netconf)
@@ -229,6 +228,20 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 				Name:      claim.Name,
 			},
 			NetworkInterfaceConfigInPod: netconf,
+		}
+
+		// Store early to guarantee profile cleanup on subsequent failures within this loop.
+		// If the preparation fails later, Kubelet will call UnprepareResourceClaims,
+		// which will find this early config and release the allocated profile.
+		if netconf.Profile != "" {
+			if err := np.podConfigStore.SetDeviceConfig(podUID, result.Device, deviceCfg); err != nil {
+				errorList = append(errorList, fmt.Errorf("failed to persist early device config for pod %s device %s: %v", podUID, result.Device, err))
+				// If we can't store it, we MUST release it immediately to prevent a leak.
+				if relErr := np.netdb.ReleaseProfileConfig(result.Device, claim.UID, &netconf); relErr != nil {
+					klog.Errorf("failed to rollback profile config for claim %v device %v: %v", claim.UID, result.Device, relErr)
+				}
+				continue
+			}
 		}
 
 		// IB-only path: device has RDMA capability but no netdev interface.
@@ -479,6 +492,22 @@ func (np *NetworkDriver) unprepareResourceClaims(ctx context.Context, claims []k
 }
 
 func (np *NetworkDriver) unprepareResourceClaim(_ context.Context, claim kubeletplugin.NamespacedObject) error {
+	for _, podUID := range np.podConfigStore.ListPods() {
+		podCfg, ok := np.podConfigStore.GetPodConfig(podUID)
+		if !ok {
+			continue
+		}
+		for deviceName, devCfg := range podCfg.DeviceConfigs {
+			if devCfg.Claim.Namespace == claim.Namespace && devCfg.Claim.Name == claim.Name {
+				if devCfg.NetworkInterfaceConfigInPod.Profile != "" {
+					if err := np.netdb.ReleaseProfileConfig(deviceName, claim.UID, &devCfg.NetworkInterfaceConfigInPod); err != nil {
+						klog.Errorf("failed to release profile config for claim %v: %v", claim.NamespacedName, err)
+					}
+				}
+			}
+		}
+	}
+
 	np.podConfigStore.DeleteClaim(claim.NamespacedName)
 	return nil
 }
@@ -618,4 +647,23 @@ func getRouteInfo(nlHandle nlwrap.Handle, ifName string, link netlink.Link) ([]a
 		}
 	}
 	return routes, tables, nil
+}
+
+// getDeviceNetworkConfig merges the user configuration with the cloud provider configuration and resolves the dynamic profile.
+// User configuration always takes precedence in case of conflicts.
+func (np *NetworkDriver) getDeviceNetworkConfig(device string, claimUID types.UID, userConf *apis.NetworkConfig) (*apis.NetworkConfig, error) {
+	cloudConf, ok := np.netdb.GetDeviceConfig(device)
+	if ok && cloudConf != nil {
+		klog.V(4).Infof("Found cloud provider configuration for device %s: %#v", device, cloudConf)
+	}
+	mergedConf := apis.MergeNetworkConfig(userConf, cloudConf)
+
+	if mergedConf.Profile != "" {
+		profileConf, err := np.netdb.GetProfileConfig(device, claimUID, mergedConf)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get profile config: %v", err)
+		}
+		mergedConf = apis.MergeNetworkConfig(mergedConf, profileConf)
+	}
+	return mergedConf, nil
 }

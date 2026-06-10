@@ -19,6 +19,10 @@ package apis
 // NetworkConfig represents the desired state of all network interfaces and their associated routes,
 // along with ethtool and sysctl configurations to be applied within the Pod's network namespace.
 type NetworkConfig struct {
+	// Profile references a pre-configured set of network and hardware
+	// parameters resolved by the provider plugin (e.g., dynamic IPAM).
+	// This separates user intent from infrastructure implementation.
+	Profile string `json:"profile,omitempty"`
 	// Interface defines core properties of the network interface.
 	// Settings here are typically managed by `ip link` commands.
 	Interface InterfaceConfig `json:"interface"`

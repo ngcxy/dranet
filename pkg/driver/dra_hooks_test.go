@@ -26,8 +26,14 @@ import (
 	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"sigs.k8s.io/dranet/pkg/apis"
+	"sigs.k8s.io/dranet/pkg/cloudprovider"
+	"sigs.k8s.io/dranet/pkg/cloudprovider/webhook"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 )
 
 func TestPublishResourcesPrometheusMetrics(t *testing.T) {
@@ -313,3 +319,481 @@ func TestValidateVFMTU(t *testing.T) {
 		})
 	}
 }
+
+func TestDynamicProfiles(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Success Case", func(t *testing.T) {
+		fakeDB := newFakeInventoryDB()
+		fakeDB.GetProfileConfigFunc = func(deviceName string, claimUID types.UID, config *apis.NetworkConfig) (*apis.NetworkConfig, error) {
+			return &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{
+					Addresses: []string{"10.0.0.1/24"},
+				},
+			}, nil
+		}
+		fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+			return &apis.NetworkConfig{Profile: "my-profile"}, true
+		}
+		fakeDB.GetNetInterfaceNameFunc = func(deviceName string) (string, error) {
+			return "eth0", nil
+		}
+		fakeDB.IsIBOnlyDeviceFunc = func(deviceName string) bool {
+			return true
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claims := []*resourcev1.ResourceClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-1", Namespace: "default", Name: "claim1"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-1"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: "test.driver", Device: "device-1", Request: "req-1"},
+							},
+							Config: []resourcev1.DeviceAllocationConfiguration{},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := np.PrepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("PrepareResourceClaims failed: %v", err)
+		}
+		if res["claim-uid-1"].Err != nil {
+			t.Fatalf("Expected no error, got %v", res["claim-uid-1"].Err)
+		}
+
+		// Verify merge success
+		podCfg, ok := np.podConfigStore.GetPodConfig("pod-uid-1")
+		if !ok {
+			t.Fatalf("Expected pod config to be stored")
+		}
+		devCfg := podCfg.DeviceConfigs["device-1"]
+		if len(devCfg.NetworkInterfaceConfigInPod.Interface.Addresses) == 0 || devCfg.NetworkInterfaceConfigInPod.Interface.Addresses[0] != "10.0.0.1/24" {
+			t.Errorf("Expected address 10.0.0.1/24 to be merged into pod config, got %v", devCfg.NetworkInterfaceConfigInPod.Interface.Addresses)
+		}
+	})
+
+	t.Run("Unsupported Provider Case", func(t *testing.T) {
+		fakeDB := newFakeInventoryDB()
+		fakeDB.GetProfileConfigFunc = func(deviceName string, claimUID types.UID, config *apis.NetworkConfig) (*apis.NetworkConfig, error) {
+			return nil, fmt.Errorf("current cloud provider does not support dynamic profiles")
+		}
+		fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+			return &apis.NetworkConfig{Profile: "my-profile"}, true
+		}
+		fakeDB.GetNetInterfaceNameFunc = func(deviceName string) (string, error) {
+			return "eth0", nil
+		}
+		fakeDB.IsIBOnlyDeviceFunc = func(deviceName string) bool {
+			return true
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claims := []*resourcev1.ResourceClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-unsupported", Namespace: "default", Name: "claim-unsup"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-unsupported"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: "test.driver", Device: "device-1", Request: "req-1"},
+							},
+							Config: []resourcev1.DeviceAllocationConfiguration{},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := np.PrepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("PrepareResourceClaims failed: %v", err)
+		}
+		if res["claim-uid-unsupported"].Err == nil || !strings.Contains(res["claim-uid-unsupported"].Err.Error(), "does not support dynamic profiles") {
+			t.Fatalf("Expected unsupported profile error, got %v", res["claim-uid-unsupported"].Err)
+		}
+	})
+
+	t.Run("Allocation Failure Case", func(t *testing.T) {
+		fakeDB := newFakeInventoryDB()
+		fakeDB.GetProfileConfigFunc = func(deviceName string, claimUID types.UID, config *apis.NetworkConfig) (*apis.NetworkConfig, error) {
+			return nil, fmt.Errorf("ipam allocation failed")
+		}
+		fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+			return &apis.NetworkConfig{Profile: "my-profile"}, true
+		}
+		fakeDB.GetNetInterfaceNameFunc = func(deviceName string) (string, error) {
+			return "eth0", nil
+		}
+		fakeDB.IsIBOnlyDeviceFunc = func(deviceName string) bool {
+			return true
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claims := []*resourcev1.ResourceClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-fail", Namespace: "default", Name: "claim-fail"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-fail"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: "test.driver", Device: "device-1", Request: "req-1"},
+							},
+							Config: []resourcev1.DeviceAllocationConfiguration{},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := np.PrepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("PrepareResourceClaims failed: %v", err)
+		}
+		if res["claim-uid-fail"].Err == nil || !strings.Contains(res["claim-uid-fail"].Err.Error(), "ipam allocation failed") {
+			t.Fatalf("Expected ipam allocation failed error, got %v", res["claim-uid-fail"].Err)
+		}
+	})
+
+	t.Run("Teardown Success Case", func(t *testing.T) {
+		released := false
+		fakeDB := newFakeInventoryDB()
+		fakeDB.ReleaseProfileConfigFunc = func(deviceName string, claimUID types.UID, config *apis.NetworkConfig) error {
+			released = true
+			if config.Profile != "my-profile" {
+				t.Errorf("Expected profile 'my-profile', got %v", config.Profile)
+			}
+			if claimUID != "claim-uid-td" {
+				t.Errorf("Expected claimUID 'claim-uid-td', got %v", claimUID)
+			}
+			return nil
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claimName := types.NamespacedName{Namespace: "default", Name: "claim-td"}
+		// Inject a profile in pod config store
+		np.podConfigStore.SetDeviceConfig("pod-uid-td", "device-1", DeviceConfig{
+			Claim:                       claimName,
+			NetworkInterfaceConfigInPod: apis.NetworkConfig{Profile: "my-profile"},
+		})
+
+		claims := []kubeletplugin.NamespacedObject{
+			{NamespacedName: claimName, UID: "claim-uid-td"},
+		}
+
+		_, err := np.UnprepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("UnprepareResourceClaims failed: %v", err)
+		}
+
+		if !released {
+			t.Errorf("Expected releaseProfileConfigFunc to be called")
+		}
+	})
+
+	t.Run("Early Store Profile Release on Subsequent Failure", func(t *testing.T) {
+		fakeDB := newFakeInventoryDB()
+		fakeDB.GetProfileConfigFunc = func(deviceName string, claimUID types.UID, config *apis.NetworkConfig) (*apis.NetworkConfig, error) {
+			return &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{
+					Addresses: []string{"10.0.0.1/24"},
+				},
+			}, nil
+		}
+		fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+			return &apis.NetworkConfig{Profile: "my-profile"}, true
+		}
+		// Cause a failure AFTER GetProfileConfig
+		fakeDB.GetNetInterfaceNameFunc = func(deviceName string) (string, error) {
+			return "", fmt.Errorf("simulated failure getting interface name")
+		}
+		fakeDB.IsIBOnlyDeviceFunc = func(deviceName string) bool {
+			return false
+		}
+
+		np := &NetworkDriver{
+			netdb:          fakeDB,
+			driverName:     "test.driver",
+			podConfigStore: mustNewPodConfigStore(),
+		}
+
+		claims := []*resourcev1.ResourceClaim{
+			{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-leak", Namespace: "default", Name: "claim-leak"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-leak"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: "test.driver", Device: "device-1", Request: "req-1"},
+							},
+							Config: []resourcev1.DeviceAllocationConfiguration{},
+						},
+					},
+				},
+			},
+		}
+
+		res, err := np.PrepareResourceClaims(ctx, claims)
+		if err != nil {
+			t.Fatalf("PrepareResourceClaims failed: %v", err)
+		}
+		if res["claim-uid-leak"].Err == nil || !strings.Contains(res["claim-uid-leak"].Err.Error(), "simulated failure") {
+			t.Fatalf("Expected simulated failure, got %v", res["claim-uid-leak"].Err)
+		}
+
+		// Verify the early device config was stored so Kubelet's call to UnprepareResourceClaims will clean it up
+		podCfg, ok := np.podConfigStore.GetPodConfig("pod-uid-leak")
+		if !ok {
+			t.Fatalf("Expected pod config to be stored early")
+		}
+		devCfg := podCfg.DeviceConfigs["device-1"]
+		if devCfg.NetworkInterfaceConfigInPod.Profile != "my-profile" {
+			t.Errorf("Expected profile 'my-profile' to be saved for cleanup, got '%v'", devCfg.NetworkInterfaceConfigInPod.Profile)
+		}
+	})
+}
+
+func TestGetDeviceNetworkConfigWithWebhook(t *testing.T) {
+	ctx := context.Background()
+
+	testCases := []struct {
+		name               string
+		userConf           *apis.NetworkConfig
+		cloudConfResponse  *apis.NetworkConfig
+		profileResponse    *apis.NetworkConfig
+		profileStatusCode  int
+		expectedError      bool
+		expectedAddresses  []string
+		expectedMTU        int32
+		expectedProfile    string
+	}{
+		{
+			name:              "No configurations provided",
+			userConf:          &apis.NetworkConfig{},
+			cloudConfResponse: nil,
+			profileResponse:   nil,
+			expectedError:     false,
+		},
+		{
+			name: "User configuration only",
+			userConf: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{MTU: ptr.To[int32](1400)},
+			},
+			expectedMTU:   1400,
+			expectedError: false,
+		},
+		{
+			name: "Cloud configuration only",
+			userConf: &apis.NetworkConfig{},
+			cloudConfResponse: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{MTU: ptr.To[int32](1500)},
+			},
+			expectedMTU:   1500,
+			expectedError: false,
+		},
+		{
+			name: "User configuration overrides Cloud configuration",
+			userConf: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{MTU: ptr.To[int32](1400)},
+			},
+			cloudConfResponse: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{MTU: ptr.To[int32](1500)},
+			},
+			expectedMTU:   1400,
+			expectedError: false,
+		},
+		{
+			name: "Profile configuration adds IP address",
+			userConf: &apis.NetworkConfig{},
+			cloudConfResponse: &apis.NetworkConfig{
+				Profile: "cloud-profile",
+			},
+			profileResponse: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{
+					Addresses: []string{"192.168.1.10/24"},
+				},
+			},
+			profileStatusCode: http.StatusOK,
+			expectedAddresses: []string{"192.168.1.10/24"},
+			expectedProfile:   "cloud-profile",
+			expectedError:     false,
+		},
+		{
+			name: "User configuration overrides Profile configuration",
+			userConf: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{MTU: ptr.To[int32](1400)},
+			},
+			cloudConfResponse: &apis.NetworkConfig{
+				Profile: "cloud-profile",
+			},
+			profileResponse: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{
+					MTU:       ptr.To[int32](1500),
+					Addresses: []string{"192.168.1.10/24"},
+				},
+			},
+			profileStatusCode: http.StatusOK,
+			expectedAddresses: []string{"192.168.1.10/24"},
+			expectedMTU:       1400,
+			expectedProfile:   "cloud-profile",
+			expectedError:     false,
+		},
+		{
+			name: "Webhook blocks Profile configuration",
+			userConf: &apis.NetworkConfig{},
+			cloudConfResponse: &apis.NetworkConfig{
+				Profile: "cloud-profile",
+			},
+			profileStatusCode: http.StatusForbidden,
+			expectedError:     true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == webhook.PathHealth {
+					json.NewEncoder(w).Encode(webhook.Capabilities{CloudProvider: true, ProfileProvider: true})
+					return
+				}
+				if r.URL.Path == webhook.PathGetDeviceAttributes {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{}`))
+					return
+				}
+				if r.URL.Path == webhook.PathGetDeviceConfig {
+					if tc.cloudConfResponse != nil {
+						w.WriteHeader(http.StatusOK)
+						json.NewEncoder(w).Encode(tc.cloudConfResponse)
+					} else {
+						w.WriteHeader(http.StatusNotFound)
+					}
+					return
+				}
+				if r.URL.Path == webhook.PathGetProfileConfig {
+					if tc.profileStatusCode != 0 && tc.profileStatusCode != http.StatusOK {
+						w.WriteHeader(tc.profileStatusCode)
+						w.Write([]byte(`{"error": "forbidden"}`))
+						return
+					}
+					if tc.profileResponse != nil {
+						w.WriteHeader(http.StatusOK)
+						json.NewEncoder(w).Encode(tc.profileResponse)
+					} else {
+						w.WriteHeader(http.StatusNotFound)
+					}
+					return
+				}
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer srv.Close()
+
+			provider, err := webhook.NewWebhookProvider(ctx, srv.URL)
+			if err != nil {
+				t.Fatalf("Failed to create webhook provider: %v", err)
+			}
+
+			fakeDB := newFakeInventoryDB()
+			fakeDB.GetProfileConfigFunc = func(deviceName string, claimUID types.UID, config *apis.NetworkConfig) (*apis.NetworkConfig, error) {
+				id := cloudprovider.DeviceIdentifiers{Name: deviceName}
+				return provider.GetProfileConfig(id, claimUID, config)
+			}
+			fakeDB.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+				id := cloudprovider.DeviceIdentifiers{Name: deviceName}
+				conf := provider.GetDeviceConfig(id)
+				return conf, conf != nil
+			}
+
+			np := &NetworkDriver{
+				netdb:          fakeDB,
+				driverName:     "test.driver",
+				podConfigStore: mustNewPodConfigStore(),
+			}
+
+			mergedConf, err := np.getDeviceNetworkConfig("device-1", "claim-uid-1", tc.userConf)
+
+			if tc.expectedError {
+				if err == nil {
+					t.Fatalf("Expected an error but got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if mergedConf == nil {
+				t.Fatalf("Merged configuration is nil")
+			}
+
+			if tc.expectedMTU > 0 {
+				if mergedConf.Interface.MTU == nil || *mergedConf.Interface.MTU != tc.expectedMTU {
+					t.Errorf("Expected MTU %d, got %v", tc.expectedMTU, mergedConf.Interface.MTU)
+				}
+			} else if mergedConf.Interface.MTU != nil {
+				t.Errorf("Expected nil MTU, got %d", *mergedConf.Interface.MTU)
+			}
+
+			if len(tc.expectedAddresses) > 0 {
+				if len(mergedConf.Interface.Addresses) != len(tc.expectedAddresses) {
+					t.Errorf("Expected addresses %v, got %v", tc.expectedAddresses, mergedConf.Interface.Addresses)
+				} else {
+					for i, addr := range tc.expectedAddresses {
+						if mergedConf.Interface.Addresses[i] != addr {
+							t.Errorf("Expected address %v, got %v", addr, mergedConf.Interface.Addresses[i])
+						}
+					}
+				}
+			} else if len(mergedConf.Interface.Addresses) > 0 {
+				t.Errorf("Expected no addresses, got %v", mergedConf.Interface.Addresses)
+			}
+
+			if tc.expectedProfile != "" {
+				if mergedConf.Profile != tc.expectedProfile {
+					t.Errorf("Expected profile %s, got %s", tc.expectedProfile, mergedConf.Profile)
+				}
+			} else if mergedConf.Profile != "" {
+				t.Errorf("Expected empty profile, got %s", mergedConf.Profile)
+			}
+		})
+	}
+}
+
