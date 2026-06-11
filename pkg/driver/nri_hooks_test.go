@@ -25,6 +25,7 @@ import (
 	"github.com/containerd/nri/pkg/api"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/dranet/pkg/apis"
 	"sigs.k8s.io/dranet/pkg/inventory"
 )
@@ -166,6 +167,7 @@ func TestRunPodSandboxUsesPersistedConfigAfterRestart(t *testing.T) {
 	np := &NetworkDriver{
 		podConfigStore: storeAfterRestart,
 		netdb:          inventory.New(),
+		eventRecorder:  record.NewFakeRecorder(100),
 	}
 	pod := &api.PodSandbox{
 		Uid:       string(podUID),
@@ -407,9 +409,8 @@ func TestRunPodSandboxMetrics(t *testing.T) {
 			np := &NetworkDriver{
 				podConfigStore: tc.podConfigStore,
 				netdb:          inventory.New(),
+				eventRecorder:  record.NewFakeRecorder(100),
 			}
-
-			// For the failure case, a pod config must exist.
 			if !tc.expectSuccess {
 				tc.podConfigStore.SetDeviceConfig(podUIDHostNetwork, "eth0", DeviceConfig{})
 			}
@@ -617,6 +618,7 @@ func TestStopPodSandboxRescanGating(t *testing.T) {
 				podConfigStore: mustNewPodConfigStore(),
 				netdb:          netdb,
 				rdmaSharedMode: tc.rdmaSharedMode,
+				eventRecorder:  record.NewFakeRecorder(100),
 			}
 			podUID := types.UID("test-pod")
 			pod := &api.PodSandbox{

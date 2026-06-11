@@ -33,6 +33,7 @@ import (
 	"golang.org/x/sys/unix"
 	"sigs.k8s.io/dranet/internal/nlwrap"
 
+	v1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/runtime"
@@ -440,9 +441,11 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 	}
 
 	if len(errorList) > 0 {
-		klog.Infof("claim %s contain errors: %v", claim.UID, errors.Join(errorList...))
+		joinedErr := errors.Join(errorList...)
+		klog.Infof("claim %s contain errors: %v", claim.UID, joinedErr)
+		np.eventRecorder.Eventf(claim, v1.EventTypeWarning, "ClaimPrepareFailed", "%v", joinedErr)
 		return kubeletplugin.PrepareResult{
-			Err: fmt.Errorf("claim %s contain errors: %w", claim.UID, errors.Join(errorList...)),
+			Err: fmt.Errorf("claim %s contain errors: %w", claim.UID, joinedErr),
 		}
 	}
 	return kubeletplugin.PrepareResult{}

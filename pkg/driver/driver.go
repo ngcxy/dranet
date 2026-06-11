@@ -31,9 +31,13 @@ import (
 	"github.com/containerd/nri/pkg/stub"
 	"sigs.k8s.io/dranet/internal/nlwrap"
 
+	v1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
 	"k8s.io/klog/v2"
@@ -93,11 +97,12 @@ func WithDBPath(path string) Option {
 }
 
 type NetworkDriver struct {
-	driverName string
-	nodeName   string
-	kubeClient kubernetes.Interface
-	draPlugin  pluginHelper
-	nriPlugin  stub.Stub
+	draPlugin     pluginHelper
+	driverName    string
+	eventRecorder record.EventRecorder
+	nodeName      string
+	nriPlugin     stub.Stub
+	kubeClient    kubernetes.Interface
 
 	// contains the host interfaces
 	netdb      inventoryDB
@@ -124,12 +129,18 @@ func Start(ctx context.Context, driverName string, kubeClient kubernetes.Interfa
 		klog.Infof("RDMA subsystem in mode: %s", rdmaNetnsMode)
 	}
 
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartStructuredLogging(0)
+	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: kubeClient.CoreV1().Events("")})
+	eventRecorder := eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: driverName, Host: nodeName})
+
 	plugin := &NetworkDriver{
 		driverName:     driverName,
 		nodeName:       nodeName,
 		kubeClient:     kubeClient,
 		rdmaSharedMode: rdmaNetnsMode == apis.RdmaNetnsModeShared,
 		clock:          clock.RealClock{},
+		eventRecorder:  eventRecorder,
 	}
 
 	for _, o := range opts {

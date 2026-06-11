@@ -22,18 +22,20 @@ import (
 	"strings"
 	"testing"
 
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/utils/ptr"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/dranet/pkg/apis"
 	"sigs.k8s.io/dranet/pkg/cloudprovider"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/webhook"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 )
 
 func TestPublishResourcesPrometheusMetrics(t *testing.T) {
@@ -148,8 +150,9 @@ func TestPrepareResourceClaimsMetrics(t *testing.T) {
 		draPluginRequestsLatencySeconds.Reset()
 
 		np := &NetworkDriver{
-			netdb:      newFakeInventoryDB(),
-			driverName: "test.driver",
+			netdb:         newFakeInventoryDB(),
+			driverName:    "test.driver",
+			eventRecorder: record.NewFakeRecorder(100),
 		}
 
 		claims := []*resourcev1.ResourceClaim{
@@ -244,6 +247,57 @@ func TestUnprepareResourceClaimsMetrics(t *testing.T) {
 			t.Fatalf("CollectAndCompare failed: %v", err)
 		}
 	})
+}
+
+func TestClaimPrepareFailedEvent(t *testing.T) {
+	ctx := context.Background()
+	fakeRecorder := record.NewFakeRecorder(10)
+
+	np := &NetworkDriver{
+		netdb:          newFakeInventoryDB(),
+		driverName:     "test.driver",
+		eventRecorder:  fakeRecorder,
+		podConfigStore: mustNewPodConfigStore(),
+	}
+
+	claims := []*resourcev1.ResourceClaim{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "my-claim",
+				Namespace: "default",
+				UID:       "claim-uid-1",
+			},
+			Status: resourcev1.ResourceClaimStatus{
+				ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+					{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-1"},
+				},
+				Allocation: &resourcev1.AllocationResult{
+					Devices: resourcev1.DeviceAllocationResult{
+						Results: []resourcev1.DeviceRequestAllocationResult{
+							{Driver: "test.driver", Device: "device-does-not-exist"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	res, err := np.PrepareResourceClaims(ctx, claims)
+	if err != nil {
+		t.Fatalf("PrepareResourceClaims returned unexpected error: %v", err)
+	}
+	if res["claim-uid-1"].Err == nil {
+		t.Fatal("expected per-claim error, got none")
+	}
+
+	select {
+	case event := <-fakeRecorder.Events:
+		if !strings.Contains(event, "ClaimPrepareFailed") {
+			t.Errorf("expected ClaimPrepareFailed event, got: %s", event)
+		}
+	default:
+		t.Error("expected a ClaimPrepareFailed event to be emitted, but none was received")
+	}
 }
 
 func TestPublishResourcesMetrics(t *testing.T) {
@@ -405,6 +459,7 @@ func TestDynamicProfiles(t *testing.T) {
 			netdb:          fakeDB,
 			driverName:     "test.driver",
 			podConfigStore: mustNewPodConfigStore(),
+			eventRecorder:  record.NewFakeRecorder(100),
 		}
 
 		claims := []*resourcev1.ResourceClaim{
@@ -454,6 +509,7 @@ func TestDynamicProfiles(t *testing.T) {
 			netdb:          fakeDB,
 			driverName:     "test.driver",
 			podConfigStore: mustNewPodConfigStore(),
+			eventRecorder:  record.NewFakeRecorder(100),
 		}
 
 		claims := []*resourcev1.ResourceClaim{
@@ -549,6 +605,7 @@ func TestDynamicProfiles(t *testing.T) {
 			netdb:          fakeDB,
 			driverName:     "test.driver",
 			podConfigStore: mustNewPodConfigStore(),
+			eventRecorder:  record.NewFakeRecorder(100),
 		}
 
 		claims := []*resourcev1.ResourceClaim{
@@ -594,15 +651,15 @@ func TestGetDeviceNetworkConfigWithWebhook(t *testing.T) {
 	ctx := context.Background()
 
 	testCases := []struct {
-		name               string
-		userConf           *apis.NetworkConfig
-		cloudConfResponse  *apis.NetworkConfig
-		profileResponse    *apis.NetworkConfig
-		profileStatusCode  int
-		expectedError      bool
-		expectedAddresses  []string
-		expectedMTU        int32
-		expectedProfile    string
+		name              string
+		userConf          *apis.NetworkConfig
+		cloudConfResponse *apis.NetworkConfig
+		profileResponse   *apis.NetworkConfig
+		profileStatusCode int
+		expectedError     bool
+		expectedAddresses []string
+		expectedMTU       int32
+		expectedProfile   string
 	}{
 		{
 			name:              "No configurations provided",
@@ -620,7 +677,7 @@ func TestGetDeviceNetworkConfigWithWebhook(t *testing.T) {
 			expectedError: false,
 		},
 		{
-			name: "Cloud configuration only",
+			name:     "Cloud configuration only",
 			userConf: &apis.NetworkConfig{},
 			cloudConfResponse: &apis.NetworkConfig{
 				Interface: apis.InterfaceConfig{MTU: ptr.To[int32](1500)},
@@ -640,7 +697,7 @@ func TestGetDeviceNetworkConfigWithWebhook(t *testing.T) {
 			expectedError: false,
 		},
 		{
-			name: "Profile configuration adds IP address",
+			name:     "Profile configuration adds IP address",
 			userConf: &apis.NetworkConfig{},
 			cloudConfResponse: &apis.NetworkConfig{
 				Profile: "cloud-profile",
@@ -676,7 +733,7 @@ func TestGetDeviceNetworkConfigWithWebhook(t *testing.T) {
 			expectedError:     false,
 		},
 		{
-			name: "Webhook blocks Profile configuration",
+			name:     "Webhook blocks Profile configuration",
 			userConf: &apis.NetworkConfig{},
 			cloudConfResponse: &apis.NetworkConfig{
 				Profile: "cloud-profile",
@@ -796,4 +853,3 @@ func TestGetDeviceNetworkConfigWithWebhook(t *testing.T) {
 		})
 	}
 }
-
