@@ -86,6 +86,12 @@ spec:
             {{- end }}
           securityContext:
             privileged: true
+          startupProbe:
+            httpGet:
+              path: {{ .Values.metricsPath }}
+              port: {{ .Values.metricsPort | default 9177 }}
+            failureThreshold: 12
+            periodSeconds: 5
           readinessProbe:
             httpGet:
               path: {{ .Values.metricsPath }}
