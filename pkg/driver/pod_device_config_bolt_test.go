@@ -18,10 +18,10 @@ package driver
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	bolt "go.etcd.io/bbolt"
@@ -32,11 +32,18 @@ import (
 func newTestBoltCheckpointer(t *testing.T) *boltCheckpointer {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	cp, err := newBoltCheckpointer(dbPath)
+	db, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
+		t.Fatalf("bolt.Open() error: %v", err)
+	}
+	cp, err := newBoltCheckpointer(db)
+	if err != nil {
+		db.Close()
 		t.Fatalf("newBoltCheckpointer() error: %v", err)
 	}
-	t.Cleanup(func() { cp.Close() })
+	t.Cleanup(func() {
+		db.Close()
+	})
 	return cp
 }
 
@@ -167,28 +174,40 @@ func TestPodConfigStore_Persistence(t *testing.T) {
 	}
 
 	// Write data via PodConfigStore and close.
-	cp1, err := newBoltCheckpointer(dbPath)
+	db1, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
+		t.Fatalf("bolt.Open() error: %v", err)
+	}
+	cp1, err := newBoltCheckpointer(db1)
+	if err != nil {
+		db1.Close()
 		t.Fatalf("newBoltCheckpointer() error: %v", err)
 	}
 	store1, err := NewPodConfigStore(cp1)
 	if err != nil {
+		db1.Close()
 		t.Fatalf("NewPodConfigStore() error: %v", err)
 	}
 	store1.SetDeviceConfig("pod-1", "eth0", config)
 	store1.SetPodNetNs("pod-1", "/var/run/netns/test-ns")
-	store1.Close()
+	db1.Close()
 
 	// Reopen and verify data was restored from checkpoint.
-	cp2, err := newBoltCheckpointer(dbPath)
+	db2, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
+		t.Fatalf("bolt.Open() reopen error: %v", err)
+	}
+	cp2, err := newBoltCheckpointer(db2)
+	if err != nil {
+		db2.Close()
 		t.Fatalf("newBoltCheckpointer() reopen error: %v", err)
 	}
 	store2, err := NewPodConfigStore(cp2)
 	if err != nil {
+		db2.Close()
 		t.Fatalf("NewPodConfigStore() reopen error: %v", err)
 	}
-	defer store2.Close()
+	defer db2.Close()
 
 	retrieved, found := store2.GetDeviceConfig("pod-1", "eth0")
 	if !found {
@@ -277,31 +296,6 @@ func TestPodConfigStore_ThreadSafetyWithBolt(t *testing.T) {
 }
 
 func TestBoltCheckpointer_Errors(t *testing.T) {
-	t.Run("creates missing parent directory", func(t *testing.T) {
-		dbPath := filepath.Join(t.TempDir(), "nested", "path", "test.db")
-
-		cp, err := newBoltCheckpointer(dbPath)
-		if err != nil {
-			t.Fatalf("newBoltCheckpointer() error: %v", err)
-		}
-		defer cp.Close()
-
-		if _, err := os.Stat(filepath.Dir(dbPath)); err != nil {
-			t.Fatalf("expected parent directory to exist: %v", err)
-		}
-	})
-
-	t.Run("invalid db path", func(t *testing.T) {
-		tempDir := t.TempDir()
-		invalidDbPath := filepath.Join(tempDir, "is_a_dir")
-		if err := os.Mkdir(invalidDbPath, 0755); err != nil {
-			t.Fatalf("failed to mkdir: %v", err)
-		}
-		_, err := newBoltCheckpointer(invalidDbPath)
-		if err == nil {
-			t.Fatal("expected error when opening a directory as bolt db")
-		}
-	})
 
 	t.Run("corrupted JSON data fails GetOrCreate", func(t *testing.T) {
 		cp := newTestBoltCheckpointer(t)
@@ -385,10 +379,6 @@ func TestPodConfigStore_NoCheckpointer(t *testing.T) {
 	store.DeletePod("pod-1")
 	if _, found := store.GetDeviceConfig("pod-1", "eth0"); found {
 		t.Error("expected not found after delete")
-	}
-
-	if err := store.Close(); err != nil {
-		t.Errorf("Close() error: %v", err)
 	}
 }
 

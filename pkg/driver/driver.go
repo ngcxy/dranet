@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/google/cel-go/cel"
+	bolt "go.etcd.io/bbolt"
 	"sigs.k8s.io/dranet/pkg/apis"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/dranet/pkg/inventory"
@@ -111,6 +112,7 @@ type NetworkDriver struct {
 	// Cache the rdma shared mode state
 	rdmaSharedMode bool
 	podConfigStore *PodConfigStore
+	db             *bolt.DB
 	dbPath         string // path for persistent bbolt database; empty means in-memory
 
 	clock clock.WithTicker // Injectable clock for testing
@@ -150,16 +152,25 @@ func Start(ctx context.Context, driverName string, kubeClient kubernetes.Interfa
 	// Initialize the pod config store with optional bbolt checkpoint backend.
 	var checkpointer Checkpointer
 	if plugin.dbPath != "" {
-		var err error
-		checkpointer, err = newBoltCheckpointer(plugin.dbPath)
+		if err := os.MkdirAll(filepath.Dir(plugin.dbPath), 0750); err != nil {
+			return nil, fmt.Errorf("failed to create pod config db directory: %w", err)
+		}
+		db, err := bolt.Open(plugin.dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 		if err != nil {
-			return nil, fmt.Errorf("failed to open pod config database at %s: %v", plugin.dbPath, err)
+			return nil, fmt.Errorf("failed to open pod config database at %s: %w", plugin.dbPath, err)
+		}
+		plugin.db = db
+
+		checkpointer, err = newBoltCheckpointer(db)
+		if err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to initialize checkpointer: %w", err)
 		}
 	}
 	store, err := NewPodConfigStore(checkpointer)
 	if err != nil {
-		if checkpointer != nil {
-			checkpointer.Close()
+		if plugin.db != nil {
+			plugin.db.Close()
 		}
 		return nil, fmt.Errorf("failed to initialize pod config store: %v", err)
 	}
@@ -350,9 +361,11 @@ func (np *NetworkDriver) Stop(ctxCancel context.CancelFunc) {
 
 	np.nriPlugin.Stop()
 
-	// Close the pod config store.
-	if err := np.podConfigStore.Close(); err != nil {
-		klog.Errorf("Failed to close pod config database: %v", err)
+	// Close the config database.
+	if np.db != nil {
+		if err := np.db.Close(); err != nil {
+			klog.Errorf("Failed to close database: %v", err)
+		}
 	}
 
 	klog.Info("Driver stopped.")

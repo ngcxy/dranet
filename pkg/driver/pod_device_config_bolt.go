@@ -19,9 +19,6 @@ package driver
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"time"
 
 	bolt "go.etcd.io/bbolt"
 	berrors "go.etcd.io/bbolt/errors"
@@ -47,32 +44,18 @@ type boltCheckpointer struct {
 // Compile-time interface check.
 var _ Checkpointer = &boltCheckpointer{}
 
-// newBoltCheckpointer opens (or creates) a bbolt database at the given path.
-func newBoltCheckpointer(path string) (*boltCheckpointer, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
-		return nil, fmt.Errorf("create pod config db directory: %w", err)
-	}
-
-	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 1 * time.Second})
-	if err != nil {
-		return nil, fmt.Errorf("open pod config db: %w", err)
-	}
-
+// newBoltCheckpointer initializes a bbolt checkpointer with the given database.
+func newBoltCheckpointer(db *bolt.DB) (*boltCheckpointer, error) {
 	// Ensure the root bucket exists.
-	err = db.Update(func(tx *bolt.Tx) error {
+	err := db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists(podConfigsBucket)
 		return err
 	})
 	if err != nil {
-		db.Close()
 		return nil, fmt.Errorf("initialize pod config db bucket: %w", err)
 	}
 
 	return &boltCheckpointer{db: db}, nil
-}
-
-func (c *boltCheckpointer) Close() error {
-	return c.db.Close()
 }
 
 func (c *boltCheckpointer) Store(podUID types.UID, deviceName string, config DeviceConfig) error {

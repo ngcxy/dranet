@@ -101,8 +101,6 @@ type Checkpointer interface {
 	Store(podUID types.UID, deviceName string, config DeviceConfig) error
 	// DeletePod removes all persisted state for the given pod.
 	DeletePod(podUID types.UID) error
-	// Close releases any resources held by the checkpointer.
-	Close() error
 }
 
 // PodConfigStore provides a thread-safe, centralized store for all network
@@ -139,14 +137,6 @@ func NewPodConfigStore(checkpointer Checkpointer) (*PodConfigStore, error) {
 	}
 
 	return s, nil
-}
-
-// Close closes the underlying checkpointer, if any.
-func (s *PodConfigStore) Close() error {
-	if s.checkpointer != nil {
-		return s.checkpointer.Close()
-	}
-	return nil
 }
 
 // UpdateLastNRIActivity updates the LastNRIActivity timestamp for a given Pod UID.

@@ -21,9 +21,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/containerd/nri/pkg/api"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	bolt "go.etcd.io/bbolt"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/dranet/pkg/apis"
@@ -80,28 +82,38 @@ func TestCreateContainerUsesPersistedConfigAfterRestart(t *testing.T) {
 	}
 
 	// Simulate NodePrepareResource storing config before the driver restarts.
-	cp1, err := newBoltCheckpointer(dbPath)
+	db1, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
+		t.Fatalf("bolt.Open() error: %v", err)
+	}
+	cp1, err := newBoltCheckpointer(db1)
+	if err != nil {
+		db1.Close()
 		t.Fatalf("newBoltCheckpointer() error: %v", err)
 	}
 	store1, err := NewPodConfigStore(cp1)
 	if err != nil {
+		db1.Close()
 		t.Fatalf("NewPodConfigStore() error: %v", err)
 	}
 	store1.SetDeviceConfig(podUID, "eth0", deviceCfg) //nolint:errcheck
-	if err := store1.Close(); err != nil {
-		t.Fatalf("Close() error: %v", err)
-	}
+	db1.Close()
 
-	cp2, err := newBoltCheckpointer(dbPath)
+	db2, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
+		t.Fatalf("bolt.Open() after restart error: %v", err)
+	}
+	cp2, err := newBoltCheckpointer(db2)
+	if err != nil {
+		db2.Close()
 		t.Fatalf("newBoltCheckpointer() after restart error: %v", err)
 	}
 	storeAfterRestart, err := NewPodConfigStore(cp2)
 	if err != nil {
+		db2.Close()
 		t.Fatalf("NewPodConfigStore() after restart error: %v", err)
 	}
-	defer storeAfterRestart.Close()
+	defer db2.Close()
 
 	np := &NetworkDriver{podConfigStore: storeAfterRestart}
 	pod := &api.PodSandbox{Uid: string(podUID), Name: "test-pod", Namespace: "test-ns"}
@@ -138,31 +150,42 @@ func TestRunPodSandboxUsesPersistedConfigAfterRestart(t *testing.T) {
 	}
 
 	// Simulate NodePrepareResource storing config before the driver restarts.
-	cp1, err := newBoltCheckpointer(dbPath)
+	db1, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
+		t.Fatalf("bolt.Open() error: %v", err)
+	}
+	cp1, err := newBoltCheckpointer(db1)
+	if err != nil {
+		db1.Close()
 		t.Fatalf("newBoltCheckpointer() error: %v", err)
 	}
 	store1, err := NewPodConfigStore(cp1)
 	if err != nil {
+		db1.Close()
 		t.Fatalf("NewPodConfigStore() error: %v", err)
 	}
 	if err := store1.SetDeviceConfig(podUID, "eth0", deviceCfg); err != nil {
+		db1.Close()
 		t.Fatalf("SetDeviceConfig() error: %v", err)
 	}
-	if err := store1.Close(); err != nil {
-		t.Fatalf("Close() error: %v", err)
-	}
+	db1.Close()
 
 	// Reopen store to simulate driver restart.
-	cp2, err := newBoltCheckpointer(dbPath)
+	db2, err := bolt.Open(dbPath, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
+		t.Fatalf("bolt.Open() after restart error: %v", err)
+	}
+	cp2, err := newBoltCheckpointer(db2)
+	if err != nil {
+		db2.Close()
 		t.Fatalf("newBoltCheckpointer() after restart error: %v", err)
 	}
 	storeAfterRestart, err := NewPodConfigStore(cp2)
 	if err != nil {
+		db2.Close()
 		t.Fatalf("NewPodConfigStore() after restart error: %v", err)
 	}
-	defer storeAfterRestart.Close()
+	defer db2.Close()
 
 	np := &NetworkDriver{
 		podConfigStore: storeAfterRestart,
