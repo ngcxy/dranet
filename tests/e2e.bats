@@ -424,6 +424,85 @@ EOF
   kubectl rollout status ds/dranet --namespace=kube-system
 }
 
+@test "unprepare claims on driver restart after pod deletion during driver downtime" {
+  local NODE_NAME="$CLUSTER_NAME"-worker
+  local DUMMY_IFACE="dummy-downtime"
+
+  docker exec "$NODE_NAME" bash -c "ip link add $DUMMY_IFACE type dummy"
+  docker exec "$NODE_NAME" bash -c "ip link set up dev $DUMMY_IFACE"
+
+  kubectl apply -f "$BATS_TEST_DIRNAME"/../tests/manifests/deviceclass.yaml
+  kubectl apply -f "$BATS_TEST_DIRNAME"/../tests/manifests/resourceclaim.yaml
+  
+  kubectl wait --timeout=30s --for=condition=ready pods -l app=pod
+
+  local POD_NAME
+  POD_NAME=$(kubectl get pods -l app=pod -o name)
+  local POD_UID
+  POD_UID=$(kubectl get "$POD_NAME" -o jsonpath='{.metadata.uid}')
+
+  # Turn down the dranet driver on NODE_NAME by scheduling it off
+  kubectl label node "$NODE_NAME" e2e-test-do-not-schedule=true
+  kubectl patch daemonset dranet -n kube-system --type='merge' --patch-file=<(cat <<EOF
+spec:
+  template:
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: e2e-test-do-not-schedule
+                operator: DoesNotExist
+EOF
+)
+  kubectl rollout status ds/dranet --namespace=kube-system
+
+  # Delete the pod forcefully. Verify the pod is immediately removed from the API server.
+  kubectl delete "$POD_NAME" --force
+  run kubectl get "$POD_NAME"
+  assert_failure
+
+  # Inspect the bbolt database for the deleted pod configs. The pod configs should
+  # still exist since driver is offline. Stream the database file using cat, redirect
+  # it to the local test path, and read the keys for the deleted pod using bbolt CLI.
+  docker exec "$NODE_NAME" cat /var/run/dranet/dranet.db > "$BATS_TEST_DIRNAME/../_artifacts/dranet.db"
+  go run go.etcd.io/bbolt/cmd/bbolt@latest keys "$BATS_TEST_DIRNAME/../_artifacts/dranet.db" pod_configs "$POD_UID" > /dev/null 2>&1
+
+  # Restore the dranet driver on NODE_NAME by reverting affinity patch and removing node label.
+  # Verify the driver is restarted sucsessfully on the node.
+  kubectl patch daemonset dranet -n kube-system --type='merge' --patch-file=<(cat <<EOF
+spec:
+  template:
+    spec:
+      affinity: {}
+EOF
+)
+  kubectl label node "$NODE_NAME" e2e-test-do-not-schedule-
+  kubectl wait --namespace=kube-system --for=condition=Ready pod -l app=dranet --field-selector spec.nodeName="$NODE_NAME" --timeout=60s
+
+  # The driver should asynchronously process the cleanup after the restart.
+  # Inspect the bbolt database again to verify the pod configs have been deleted.
+  local retries=10
+  local wait_sec=2
+  local removed=false
+
+  for ((i=1; i<=retries; i++)); do
+    if ! docker exec "$NODE_NAME" cat /var/run/dranet/dranet.db > "$BATS_TEST_DIRNAME/../_artifacts/dranet.db"; then
+      sleep $wait_sec
+      continue
+    fi
+    if ! go run go.etcd.io/bbolt/cmd/bbolt@latest keys "$BATS_TEST_DIRNAME/../_artifacts/dranet.db" pod_configs "$POD_UID" > /dev/null 2>&1; then
+      removed=true
+      break
+    fi
+    sleep $wait_sec
+  done
+
+  [ "$removed" = "true" ]
+}
+
+
 @test "permanent neighbor entry is copied to pod namespace" {
   local NODE_NAME="$CLUSTER_NAME"-worker
   local DUMMY_IFACE="dummy-neigh"

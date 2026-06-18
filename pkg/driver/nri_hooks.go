@@ -51,16 +51,10 @@ func (np *NetworkDriver) Synchronize(_ context.Context, pods []*api.PodSandbox, 
 		livePodNetNs[types.UID(pod.Uid)] = getNetworkNamespace(pod)
 	}
 
-	// Process stored pods: update NetNS for live pods, and prune configurations
-	// for pods that no longer exist in the runtime.
+	// Process stored pods: update NetNS for live pods.
 	for _, storedUID := range np.podConfigStore.ListPods() {
-		ns, isLive := livePodNetNs[storedUID]
-
-		if isLive {
+		if ns, isLive := livePodNetNs[storedUID]; isLive {
 			np.podConfigStore.SetPodNetNs(storedUID, ns)
-		} else {
-			klog.Infof("Synchronize: pruning stale config for pod %s", storedUID)
-			np.podConfigStore.DeletePod(storedUID)
 		}
 	}
 
