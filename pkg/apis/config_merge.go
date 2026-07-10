@@ -55,6 +55,11 @@ func MergeNetworkConfig(user, cloud *NetworkConfig) *NetworkConfig {
 	merged.Routes = deduplicateRoutes(merged.Routes)
 	merged.Neighbors = deduplicateNeighbors(merged.Neighbors)
 
+	// Drop the meaningless IPVLAN config if the resolved type is not ipvlan.
+	if merged.Interface.Type != InterfaceTypeIPVLAN {
+		merged.Interface.IPVlan = nil
+	}
+
 	return merged
 }
 
