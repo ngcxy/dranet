@@ -166,9 +166,13 @@ func main() {
 
 	opts := []driver.Option{}
 
-	if dbPath != "" {
-		opts = append(opts, driver.WithDBPath(dbPath))
+	// Build the pod config store. If dbPath is empty the store is in-memory only;
+	// otherwise it is backed by a bbolt checkpoint at that path.
+	store, err := driver.NewPodConfigStore(dbPath)
+	if err != nil {
+		klog.Fatalf("failed to initialize pod config store: %v", err)
 	}
+	defer store.Close()
 
 	opts = append(opts, driver.WithKubeletRootDir(kubeletRootDir))
 
