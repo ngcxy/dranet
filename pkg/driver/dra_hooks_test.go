@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,9 +156,10 @@ func TestPrepareResourceClaimsMetrics(t *testing.T) {
 		draPluginRequestsLatencySeconds.Reset()
 
 		np := &NetworkDriver{
-			netdb:         newFakeInventoryDB(),
-			driverName:    "test.driver",
-			eventRecorder: record.NewFakeRecorder(100),
+			netdb:          newFakeInventoryDB(),
+			driverName:     "test.driver",
+			eventRecorder:  record.NewFakeRecorder(100),
+			podConfigStore: mustNewPodConfigStore(),
 		}
 
 		claims := []*resourcev1.ResourceClaim{
@@ -1215,6 +1217,88 @@ func testPrepareResourceClaim_Namespaced(t *testing.T) {
 			},
 			wantErr: "failed to get network interface name for device net-dev-0",
 		},
+		{
+			name: "subinterface resolving with no addresses returns error",
+			claim: &resourcev1.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-subif-noaddr", Namespace: "default", Name: "claim-subif-noaddr"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-subif-noaddr"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: testDriverName, Device: "net-dev-0", Request: "req-0"},
+							},
+						},
+					},
+				},
+			},
+			setupDB: func(db *fakeInventoryDB) {
+				db.IsIBOnlyDeviceFunc = func(deviceName string) bool { return false }
+				db.GetNetInterfaceNameFunc = func(deviceName string) (string, error) { return "dummy0", nil }
+				db.GetDeviceFunc = func(deviceName string) (resourcev1.Device, bool) {
+					return resourcev1.Device{Name: deviceName}, true
+				}
+				// Cloud advertises an ipvlan subinterface but resolves no addresses.
+				db.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+					return &apis.NetworkConfig{Interface: apis.InterfaceConfig{Type: "IPVLAN"}}, true
+				}
+			},
+			wantErr: "resolved with no addresses",
+		},
+		{
+			name: "unnumbered subinterface is allowed without addresses",
+			claim: &resourcev1.ResourceClaim{
+				ObjectMeta: metav1.ObjectMeta{UID: "claim-uid-subif-unnum", Namespace: "default", Name: "claim-subif-unnum"},
+				Status: resourcev1.ResourceClaimStatus{
+					ReservedFor: []resourcev1.ResourceClaimConsumerReference{
+						{APIGroup: "", Resource: "pods", Name: "test-pod", UID: "pod-uid-subif-unnum"},
+					},
+					Allocation: &resourcev1.AllocationResult{
+						Devices: resourcev1.DeviceAllocationResult{
+							Results: []resourcev1.DeviceRequestAllocationResult{
+								{Driver: testDriverName, Device: "net-dev-0", Request: "req-0"},
+							},
+						},
+					},
+				},
+			},
+			setupDB: func(db *fakeInventoryDB) {
+				db.IsIBOnlyDeviceFunc = func(deviceName string) bool { return false }
+				db.GetNetInterfaceNameFunc = func(deviceName string) (string, error) { return "dummy0", nil }
+				db.GetDeviceFunc = func(deviceName string) (resourcev1.Device, bool) {
+					return resourcev1.Device{Name: deviceName}, true
+				}
+				// Cloud advertises an unnumbered ipvlan subinterface.
+				db.GetDeviceConfigFunc = func(deviceName string) (*apis.NetworkConfig, bool) {
+					return &apis.NetworkConfig{Interface: apis.InterfaceConfig{Type: "IPVLAN", Addressing: apis.AddressingModeUnnumbered}}, true
+				}
+			},
+			wantPodConfig: &PodConfig{
+				DeviceConfigs: map[string]DeviceConfig{
+					"net-dev-0": {
+						Claim: types.NamespacedName{
+							Namespace: "default",
+							Name:      "claim-subif-unnum",
+						},
+						DeviceSnapshot: &resourcev1.Device{Name: "net-dev-0"},
+						NetworkInterfaceConfigInHost: apis.NetworkConfig{
+							Interface: apis.InterfaceConfig{
+								Name: "dummy0",
+							},
+						},
+						NetworkInterfaceConfigInPod: apis.NetworkConfig{
+							Interface: apis.InterfaceConfig{
+								Name:       "dummy0",
+								Type:       "IPVLAN",
+								Addressing: apis.AddressingModeUnnumbered,
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range testCases {
@@ -1252,6 +1336,152 @@ func testPrepareResourceClaim_Namespaced(t *testing.T) {
 			opts := []cmp.Option{cmpopts.EquateEmpty(), cmpopts.IgnoreFields(PodConfig{}, "LastNRIActivity")}
 			if diff := cmp.Diff(tc.wantPodConfig, gotPodConfig, opts...); diff != "" {
 				t.Errorf("PodConfig mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestAddSourceBasedRoutingRule(t *testing.T) {
+	const ifName = "ipvlan0"
+	h := fnv.New32a()
+	h.Write([]byte(ifName))
+	wantTable := int((h.Sum32() % 1000) + apis.RouteTableOffset)
+
+	tests := []struct {
+		name         string
+		deviceCfg    DeviceConfig
+		parentRoutes []apis.RouteConfig
+		wantRules    []apis.RuleConfig
+		wantRoutes   []apis.RouteConfig
+	}{
+		{
+			name: "IPv4 no route containing gateway, source-based routing should not be added",
+			deviceCfg: DeviceConfig{
+				NetworkInterfaceConfigInPod: apis.NetworkConfig{
+					Interface: apis.InterfaceConfig{
+						Name:      ifName,
+						Type:      apis.InterfaceTypeIPVLAN,
+						Addresses: []string{"192.168.1.3/32"},
+					},
+				},
+			},
+			parentRoutes: []apis.RouteConfig{
+				{Destination: "192.168.1.0/24", Table: 0},
+			},
+			wantRules:  nil,
+			wantRoutes: nil,
+		},
+		{
+			name: "IPv6 default route in main table, source-based routing should be added",
+			deviceCfg: DeviceConfig{
+				NetworkInterfaceConfigInPod: apis.NetworkConfig{
+					Interface: apis.InterfaceConfig{
+						Name:      ifName,
+						Type:      apis.InterfaceTypeIPVLAN,
+						Addresses: []string{"2001:db8::3/128"},
+					},
+				},
+			},
+			parentRoutes: []apis.RouteConfig{
+				{Destination: "::/0", Gateway: "fe80::1", Table: 0},
+			},
+			wantRules: []apis.RuleConfig{
+				{Source: "2001:db8::3/128", Table: wantTable, Priority: 32000},
+			},
+			wantRoutes: []apis.RouteConfig{
+				{Destination: "fe80::1/128", Table: wantTable, Scope: 253},
+				{Destination: "::/0", Gateway: "fe80::1", Table: wantTable},
+			},
+		},
+		{
+			name: "dual-stack routes with gateways, both IPv4 and IPv6 routes and rules should be added",
+			deviceCfg: DeviceConfig{
+				NetworkInterfaceConfigInPod: apis.NetworkConfig{
+					Interface: apis.InterfaceConfig{
+						Name:      ifName,
+						Type:      apis.InterfaceTypeIPVLAN,
+						Addresses: []string{"192.168.1.3/32", "2001:db8::3/128"},
+					},
+				},
+			},
+			parentRoutes: []apis.RouteConfig{
+				{Destination: "192.168.1.0/24", Gateway: "192.168.1.1", Table: 100},
+				{Destination: "2001:db8::/64", Gateway: "fe80::1", Table: 0},
+			},
+			wantRules: []apis.RuleConfig{
+				{Source: "192.168.1.3/32", Table: wantTable, Priority: 32000},
+				{Source: "2001:db8::3/128", Table: wantTable, Priority: 32000},
+			},
+			wantRoutes: []apis.RouteConfig{
+				{Destination: "192.168.1.1/32", Table: wantTable, Scope: 253},
+				{Destination: "0.0.0.0/0", Gateway: "192.168.1.1", Table: wantTable},
+				{Destination: "fe80::1/128", Table: wantTable, Scope: 253},
+				{Destination: "::/0", Gateway: "fe80::1", Table: wantTable},
+			},
+		},
+		{
+			name: "multiple IPv6 addresses with the default route, two rules and one set of custom table routes should be added",
+			deviceCfg: DeviceConfig{
+				NetworkInterfaceConfigInPod: apis.NetworkConfig{
+					Interface: apis.InterfaceConfig{
+						Name:      ifName,
+						Type:      apis.InterfaceTypeIPVLAN,
+						Addresses: []string{"2001:db8::3/128", "2001:db8::4/128"},
+					},
+				},
+			},
+			parentRoutes: []apis.RouteConfig{
+				{Destination: "::/0", Gateway: "fe80::1", Table: 0},
+			},
+			wantRules: []apis.RuleConfig{
+				{Source: "2001:db8::3/128", Table: wantTable, Priority: 32000},
+				{Source: "2001:db8::4/128", Table: wantTable, Priority: 32000},
+			},
+			wantRoutes: []apis.RouteConfig{
+				{Destination: "fe80::1/128", Table: wantTable, Scope: 253},
+				{Destination: "::/0", Gateway: "fe80::1", Table: wantTable},
+			},
+		},
+		{
+			name: "family present but no matching gateway, source-based routing should not be added",
+			deviceCfg: DeviceConfig{
+				NetworkInterfaceConfigInPod: apis.NetworkConfig{
+					Interface: apis.InterfaceConfig{
+						Name:      ifName,
+						Type:      apis.InterfaceTypeIPVLAN,
+						Addresses: []string{"2001:db8::3/128"}, // IPv6 address
+					},
+				},
+			},
+			parentRoutes: []apis.RouteConfig{
+				{Destination: "0.0.0.0/0", Gateway: "192.168.1.1", Table: 0}, // only an IPv4 gateway
+			},
+			wantRules:  nil,
+			wantRoutes: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			addSourceBasedRouting(&tt.deviceCfg, tt.parentRoutes)
+			gotRules := tt.deviceCfg.NetworkInterfaceConfigInPod.Rules
+			if len(gotRules) != len(tt.wantRules) {
+				t.Fatalf("Expected %d rules, got %d", len(tt.wantRules), len(gotRules))
+			}
+			for i := range gotRules {
+				if gotRules[i].Source != tt.wantRules[i].Source || gotRules[i].Table != tt.wantRules[i].Table || gotRules[i].Priority != tt.wantRules[i].Priority {
+					t.Errorf("gotRules[%d] = %+v, want %+v", i, gotRules[i], tt.wantRules[i])
+				}
+			}
+
+			gotRoutes := tt.deviceCfg.NetworkInterfaceConfigInPod.Routes
+			if len(gotRoutes) != len(tt.wantRoutes) {
+				t.Fatalf("Expected %d routes, got %d", len(tt.wantRoutes), len(gotRoutes))
+			}
+			for i := range gotRoutes {
+				if gotRoutes[i].Destination != tt.wantRoutes[i].Destination || gotRoutes[i].Gateway != tt.wantRoutes[i].Gateway || gotRoutes[i].Table != tt.wantRoutes[i].Table || gotRoutes[i].Scope != tt.wantRoutes[i].Scope {
+					t.Errorf("gotRoutes[%d] = %+v, want %+v", i, gotRoutes[i], tt.wantRoutes[i])
+				}
 			}
 		})
 	}
