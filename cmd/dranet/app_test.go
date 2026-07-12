@@ -153,7 +153,7 @@ func TestSetupProviders(t *testing.T) {
 				endpoint = srv.URL
 			}
 
-			cloudInst, profProv, err := setupProviders(ctx, tt.cloudProviderHint, tt.profileProvider, endpoint)
+			cloudInst, profProv, err := setupProviders(ctx, tt.cloudProviderHint, tt.profileProvider, endpoint, nil)
 
 			if (err != nil) != tt.expectErr {
 				t.Errorf("expected error: %v, got: %v", tt.expectErr, err)

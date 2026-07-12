@@ -196,7 +196,7 @@ func main() {
 		}
 		opts = append(opts, driver.WithFilter(prg))
 	}
-	cloudInst, profProv, err := setupProviders(ctx, cloudProviderHint, profileProvider, webhookURL)
+	cloudInst, profProv, err := setupProviders(ctx, cloudProviderHint, profileProvider, webhookURL, store.GetInUseSubinterfaceIPs())
 	if err != nil {
 		klog.Fatalf("failed to setup providers: %v", err)
 	}
@@ -216,7 +216,7 @@ func main() {
 
 	db := inventory.New(optsDb...)
 	opts = append(opts, driver.WithInventory(db))
-	dranet, err := driver.Start(ctx, driverName, clientset, nodeName, opts...)
+	dranet, err := driver.Start(ctx, driverName, clientset, nodeName, store, opts...)
 	if err != nil {
 		klog.Fatalf("driver failed to start: %v", err)
 	}
@@ -250,7 +250,7 @@ func printVersion() {
 	klog.Infof("dranet go %s build: %s time: %s", info.GoVersion, vcsRevision, vcsTime)
 }
 
-func setupProviders(ctx context.Context, cloudProviderHint string, profileProvider string, webhookURL string) (cloudprovider.CloudInstance, cloudprovider.ProfileProvider, error) {
+func setupProviders(ctx context.Context, cloudProviderHint string, profileProvider string, webhookURL string, reservedAddresses []string) (cloudprovider.CloudInstance, cloudprovider.ProfileProvider, error) {
 	var cloudInst cloudprovider.CloudInstance
 	var profProv cloudprovider.ProfileProvider
 	var err error
@@ -264,7 +264,7 @@ func setupProviders(ctx context.Context, cloudProviderHint string, profileProvid
 	}
 
 	// Setup the Underlay (Hardware Discovery / Cloud Instance Info)
-	cloudInst, err = discovery.GetInstanceProperties(ctx, hint, webhookURL)
+	cloudInst, err = discovery.GetInstanceProperties(ctx, hint, webhookURL, reservedAddresses)
 	if err != nil {
 		klog.Infof("failed to initialize cloud provider %q: %v", hint, err)
 		cloudInst = nil
