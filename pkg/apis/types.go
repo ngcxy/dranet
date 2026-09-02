@@ -32,8 +32,17 @@ type NetworkConfig struct {
 	Routes []RouteConfig `json:"routes,omitempty"`
 
 	// Rules defines routing rules to be configured for this interface.
-	// Rules are not supported when VRF (Interface.VRF) is enabled.
+	// Rules are not supported when VRF (Interface.VRF) or PBR is enabled.
 	Rules []RuleConfig `json:"rules,omitempty"`
+
+	// PBR enables policy-based routing for this interface. When true, DRANET moves
+	// all of the interface's routes into a dedicated per-interface routing table
+	// and generates one source rule per interface address pointing at that table.
+	// Any Table set on individual routes is overridden.
+	//
+	// PBR is mutually exclusive with VRF (Interface.VRF) and with explicitly
+	// provided Rules; setting it together with either is rejected by validation.
+	PBR *bool `json:"pbr,omitempty"`
 
 	// Neighbors defines permanent neighbor (ARP/NDP) entries to be added for this interface.
 	Neighbors []NeighborConfig `json:"neighbors,omitempty"`
@@ -213,6 +222,10 @@ type RouteConfig struct {
 	// IMPORTANT: If VRF is enabled on the interface, this field is IGNORED.
 	// Dranet will automatically assign ALL routes for the interface to the VRF's table
 	// to ensure they are reachable via the VRF device.
+	//
+	// Likewise, if PBR (NetworkConfig.PBR) is enabled, this field is IGNORED.
+	// Dranet assigns ALL routes to an automatically generated per-interface table
+	// that the generated source rules point at.
 	//
 	// Common reserved tables:
 	// - 255: local (handled by kernel)

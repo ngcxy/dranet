@@ -64,6 +64,18 @@ func TestMergeNetworkConfig(t *testing.T) {
 			},
 		},
 		{
+			name: "user explicitly set PBR to false, overrides cloud PBR",
+			user: &NetworkConfig{
+				PBR: ptr.To(false),
+			},
+			cloud: &NetworkConfig{
+				PBR: ptr.To(true),
+			},
+			want: &NetworkConfig{
+				PBR: ptr.To(false),
+			},
+		},
+		{
 			name: "merge slices without duplicates",
 			user: &NetworkConfig{
 				Interface: InterfaceConfig{

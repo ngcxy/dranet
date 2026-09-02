@@ -167,6 +167,59 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
+func TestValidatePBRConfig(t *testing.T) {
+	routes := []RouteConfig{{Destination: "0.0.0.0/0", Gateway: "192.168.1.254"}}
+	tests := []struct {
+		name        string
+		config      *NetworkConfig
+		expectErr   bool
+		errContains string
+	}{
+		{name: "nil config", config: nil, expectErr: false},
+		{name: "pbr not set", config: &NetworkConfig{Routes: routes}, expectErr: false},
+		{name: "pbr false", config: &NetworkConfig{PBR: ptr.To(false)}, expectErr: false},
+		{name: "valid pbr with routes", config: &NetworkConfig{PBR: ptr.To(true), Routes: routes}, expectErr: false},
+		{
+			name:        "pbr with VRF is rejected",
+			config:      &NetworkConfig{PBR: ptr.To(true), Routes: routes, Interface: InterfaceConfig{VRF: &VRFConfig{Name: "my-vrf"}}},
+			expectErr:   true,
+			errContains: "PBR is not supported when VRF is enabled",
+		},
+		{
+			name:        "pbr with rules is rejected",
+			config:      &NetworkConfig{PBR: ptr.To(true), Routes: routes, Rules: []RuleConfig{{Source: "10.0.0.0/8", Table: 100}}},
+			expectErr:   true,
+			errContains: "PBR cannot be combined with explicitly provided rules",
+		},
+		{
+			name:        "pbr without routes is rejected",
+			config:      &NetworkConfig{PBR: ptr.To(true)},
+			expectErr:   true,
+			errContains: "PBR requires at least one route",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidatePBRConfig(tt.config)
+			if (len(errs) > 0) != tt.expectErr {
+				t.Fatalf("ValidatePBRConfig() errs = %v, expectErr %v", errs, tt.expectErr)
+			}
+			if tt.errContains != "" {
+				found := false
+				for _, e := range errs {
+					if strings.Contains(e.Error(), tt.errContains) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("ValidatePBRConfig() expected error containing %q, got %v", tt.errContains, errs)
+				}
+			}
+		})
+	}
+}
+
 func TestIsValidLinuxInterfaceName(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -600,6 +653,11 @@ func TestValidateRDMAOnlyConfigRejectsARPSettings(t *testing.T) {
 		{
 			name:      "addressing is rejected",
 			raw:       `{"interface":{"addressing":"DHCP"}}`,
+			expectErr: true,
+		},
+		{
+			name:      "pbr is rejected",
+			raw:       `{"pbr":true}`,
 			expectErr: true,
 		},
 		{

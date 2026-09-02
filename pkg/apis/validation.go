@@ -97,6 +97,26 @@ func ValidateConfig(raw *runtime.RawExtension) (*NetworkConfig, []error) {
 	return &config, nil
 }
 
+// ValidatePBRConfig validates policy-based routing constraints. It's run
+// after the user and cloud/profile configurations are merged, because the
+// interacting fields (pbr, routes, rules, vrf) may originate from different sources.
+func ValidatePBRConfig(config *NetworkConfig) []error {
+	if config == nil || config.PBR == nil || !*config.PBR {
+		return nil
+	}
+	var allErrors []error
+	if config.Interface.VRF != nil {
+		allErrors = append(allErrors, fmt.Errorf("PBR is not supported when VRF is enabled"))
+	}
+	if len(config.Rules) > 0 {
+		allErrors = append(allErrors, fmt.Errorf("PBR cannot be combined with explicitly provided rules"))
+	}
+	if len(config.Routes) == 0 {
+		allErrors = append(allErrors, fmt.Errorf("PBR requires at least one route"))
+	}
+	return allErrors
+}
+
 // isValidLinuxInterfaceName checks if the provided name is a valid Linux interface name.
 // Basic checks: length, no '/', no whitespace, not '.' or '..'.
 func isValidLinuxInterfaceName(name string, fieldPath string) (allErrors []error) {
@@ -396,6 +416,9 @@ func ValidateRDMAOnlyConfig(raw *runtime.RawExtension) []error {
 	}
 	if len(config.Rules) > 0 {
 		allErrors = append(allErrors, fmt.Errorf("rules are not supported for RDMA-only devices (no network interface present)"))
+	}
+	if config.PBR != nil {
+		allErrors = append(allErrors, fmt.Errorf("PBR is not supported for RDMA-only devices (no network interface present)"))
 	}
 	if config.Ethtool != nil {
 		allErrors = append(allErrors, fmt.Errorf("ethtool configuration is not supported for RDMA-only devices (no network interface present)"))

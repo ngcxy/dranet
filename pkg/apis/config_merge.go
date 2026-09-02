@@ -45,6 +45,12 @@ func MergeNetworkConfig(user, cloud *NetworkConfig) *NetworkConfig {
 		return &NetworkConfig{}
 	}
 
+	// mergo treats a *bool pointing to false as empty, so a user
+	// PBR=false would not override. Apply the pointer directly.
+	if user.PBR != nil {
+		merged.PBR = user.PBR
+	}
+
 	// Deduplicate slices where order or uniqueness matters.
 	// For addresses, we just unique them.
 	merged.Interface.Addresses = deduplicateStrings(merged.Interface.Addresses)

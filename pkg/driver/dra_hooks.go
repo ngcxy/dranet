@@ -269,6 +269,13 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			}
 		}
 
+		// Validate PBR constraints on the merged config because relevant configs
+		// may originate from different sources (user, cloud, or profile).
+		if errs := apis.ValidatePBRConfig(&netconf); len(errs) > 0 {
+			errorList = append(errorList, errs...)
+			continue
+		}
+
 		// IB-only path: device has RDMA capability but no netdev interface.
 		if np.netdb.IsIBOnlyDevice(result.Device) {
 			// Reject any network-specific config fields for RDMA-only devices.
@@ -351,22 +358,29 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 				deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = []string{ip}
 				deviceCfg.NetworkInterfaceConfigInPod.Routes = append(deviceCfg.NetworkInterfaceConfigInPod.Routes, routes...)
 			}
-		} else if !deviceCfg.NetworkInterfaceConfigInPod.Interface.IsSubinterface() && len(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses) == 0 {
-			// For a passthrough interface with no custom addresses and no DHCP, then use the existing ones
-			// get the existing IP addresses
-			nlAddresses, err := nlHandle.AddrList(link, netlink.FAMILY_ALL)
-			if err != nil {
-				errorList = append(errorList, fmt.Errorf("fail to get ip addresses for interface %s : %w", ifName, err))
-			} else {
-				for _, address := range nlAddresses {
-					// Only move IP addresses with global scope because those are not host-specific, auto-configured,
-					// or have limited network scope, making them unsuitable inside the container namespace.
-					// Ref: https://www.ietf.org/rfc/rfc3549.txt
-					if address.Scope != unix.RT_SCOPE_UNIVERSE {
-						continue
+		} else if len(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses) == 0 {
+			if !deviceCfg.NetworkInterfaceConfigInPod.Interface.IsSubinterface() {
+				// For a passthrough interface with no custom addresses and no DHCP, then use the existing ones
+				// get the existing IP addresses
+				nlAddresses, err := nlHandle.AddrList(link, netlink.FAMILY_ALL)
+				if err != nil {
+					errorList = append(errorList, fmt.Errorf("fail to get ip addresses for interface %s : %w", ifName, err))
+				} else {
+					for _, address := range nlAddresses {
+						// Only move IP addresses with global scope because those are not host-specific, auto-configured,
+						// or have limited network scope, making them unsuitable inside the container namespace.
+						// Ref: https://www.ietf.org/rfc/rfc3549.txt
+						if address.Scope != unix.RT_SCOPE_UNIVERSE {
+							continue
+						}
+						deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = append(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses, address.IPNet.String())
 					}
-					deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses = append(deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses, address.IPNet.String())
 				}
+			} else if deviceCfg.NetworkInterfaceConfigInPod.Interface.Addressing == apis.AddressingModeUnnumbered {
+				klog.V(2).Infof("device %s: unnumbered %s interface requested; skipping address and route configuration", result.Device, deviceCfg.NetworkInterfaceConfigInPod.Interface.Type)
+			} else {
+				errorList = append(errorList, fmt.Errorf("device %s: subinterface type %q resolved with no addresses; set interface.addresses, reference a profile that allocates them, or set interface.addressing: Unnumbered", result.Device, deviceCfg.NetworkInterfaceConfigInPod.Interface.Type))
+				continue
 			}
 		}
 
@@ -400,8 +414,16 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 			deviceCfg.NetworkInterfaceConfigInPod.Ethtool.Features = ethtoolFeatures
 		}
 
-		// For non-subinterface type, obtain the routes and rules associated with the interface.
-		if !deviceCfg.NetworkInterfaceConfigInPod.Interface.IsSubinterface() {
+
+		// Configure the interface routing based on configurations
+		//   - PBR: move the provided routes into a dedicated per-interface table
+		//     and generate one source rule per interface address.
+		//   - non-subinterface without PBR: inherit the host interface's routes,
+		//     and its rules unless a VRF handles the table lookup.
+		// A subinterface without PBR has no host routing to inherit.
+		if deviceCfg.NetworkInterfaceConfigInPod.PBR != nil && *deviceCfg.NetworkInterfaceConfigInPod.PBR {
+			addPolicyBasedRouting(&deviceCfg)
+		} else if !deviceCfg.NetworkInterfaceConfigInPod.Interface.IsSubinterface() {
 			routes, tables, err := getRouteInfo(nlHandle, ifName, link)
 			if err != nil {
 				errorList = append(errorList, err)
@@ -441,31 +463,6 @@ func (np *NetworkDriver) prepareResourceClaim(ctx context.Context, claim *resour
 				HardwareAddr: neigh.HardwareAddr.String(),
 			}
 			deviceCfg.NetworkInterfaceConfigInPod.Neighbors = append(deviceCfg.NetworkInterfaceConfigInPod.Neighbors, neighCfg)
-		}
-
-		// Configure addressing/routing for subinterfaces. A subinterface has no
-		// host addresses to inherit, so its addresses must come from the user
-		// config, a profile, or be explicitly waived via Addressing: Unnumbered.
-		if deviceCfg.NetworkInterfaceConfigInPod.Interface.IsSubinterface() {
-			iface := &deviceCfg.NetworkInterfaceConfigInPod.Interface
-			switch {
-			case len(deviceCfg.NetworkInterfaceConfigInPod.Routes) > 0 || len(deviceCfg.NetworkInterfaceConfigInPod.Rules) > 0:
-				// User-provided routes/rules exist; skip automatic source-based routing.
-			case len(iface.Addresses) > 0:
-				// Derive the gateway from the parent's routes to build source-based
-				// routing, without copying those routes/rules into the pod config.
-				parentRoutes, _, err := getRouteInfo(nlHandle, ifName, link)
-				if err != nil {
-					errorList = append(errorList, err)
-					continue
-				}
-				addSourceBasedRouting(&deviceCfg, parentRoutes)
-			case iface.Addressing == apis.AddressingModeUnnumbered:
-				klog.V(2).Infof("device %s: unnumbered %s interface requested; skipping address and route configuration", result.Device, iface.Type)
-			default:
-				errorList = append(errorList, fmt.Errorf("device %s: interface type %q resolved with no addresses; set interface.addresses, reference a profile that allocates them, or set interface.addressing: Unnumbered", result.Device, iface.Type))
-				continue
-			}
 		}
 
 		// Get RDMA configuration: link and char devices
@@ -785,77 +782,40 @@ func mergeDeviceStructs(live, snap resourceapi.Device) resourceapi.Device {
 	return merged
 }
 
-// addSourceBasedRouting sets up source-based routing for the subinterface: each
-// source address egresses via a per-interface table holding an on-link gateway route
-// and a default route. The gateway for each IP family is derived from parentRoutes.
-func addSourceBasedRouting(deviceCfg *DeviceConfig, parentRoutes []apis.RouteConfig) {
+// sourceBasedRoutingRulePriority is the priority of the generated PBR rules.
+// It is below the default main-table rule (32766) so source lookups take
+// precedence over the main routing table.
+const sourceBasedRoutingRulePriority = 32000
+
+// addPolicyBasedRouting configures policy-based routing for a subinterface from
+// its provided routes. It moves provided routes into a dedicated per-interface table
+// and adds a rule directing each interface address to that table. Routes are not
+// synthesized and the caller must provide them.
+func addPolicyBasedRouting(deviceCfg *DeviceConfig) {
+	cfg := &deviceCfg.NetworkInterfaceConfigInPod
 	h := fnv.New32a()
-	h.Write([]byte(deviceCfg.NetworkInterfaceConfigInPod.Interface.Name))
+	h.Write([]byte(cfg.Interface.Name))
 	tableID := int((h.Sum32() % 1000) + apis.RouteTableOffset)
 
-	// Find the gateway for each IP family from the parent routes.
-	// gateways stores the gateway IP addresses, keyed by "ipv4" and "ipv6".
-	gateways := make(map[string]netip.Addr)
-	for _, r := range parentRoutes {
-		if r.Gateway != "" {
-			if gatewayAddr, err := netip.ParseAddr(r.Gateway); err == nil {
-				if gatewayAddr.Is6() {
-					gateways["ipv6"] = gatewayAddr
-				} else if gatewayAddr.Is4() {
-					gateways["ipv4"] = gatewayAddr
-				}
-			}
-		}
-	}
-	if len(gateways) == 0 {
-		klog.Warningf("Unable to configure source-based routing: no gateway found on interface %s", deviceCfg.NetworkInterfaceConfigInPod.Interface.Name)
-		return
+	// Move all routes into the per-interface table, overriding any caller-set
+	// table so the generated rules always resolve against them.
+	for i := range cfg.Routes {
+		cfg.Routes[i].Table = tableID
 	}
 
-	// Iterate through IP addresses to inject the gateway and default routes into the
-	// custom table, and add a source-based routing rule for each IP targeting the custom table.
-	// addedRoutes records whether the gateway and default routes are added for "ipv4" and "ipv6".
-	addedRoutes := make(map[string]bool)
-	for _, ipStr := range deviceCfg.NetworkInterfaceConfigInPod.Interface.Addresses {
-		prefix, _ := netip.ParsePrefix(ipStr)
-		var stack string
-		var defaultPrefix netip.Prefix
-		switch {
-		case prefix.Addr().Is6():
-			stack = "ipv6"
-			defaultPrefix = netip.PrefixFrom(netip.IPv6Unspecified(), 0)
-		case prefix.Addr().Is4():
-			stack = "ipv4"
-			defaultPrefix = netip.PrefixFrom(netip.IPv4Unspecified(), 0)
-		default:
+	// Add a rule per interface address directing its traffic to the table.
+	for _, ipStr := range cfg.Interface.Addresses {
+		prefix, err := netip.ParsePrefix(ipStr)
+		if err != nil {
+			klog.Warningf("skipping PBR rule for interface %s: invalid address %q: %v", cfg.Interface.Name, ipStr, err)
 			continue
 		}
-		gwAddr, hasGw := gateways[stack]
-		if !hasGw {
-			continue
-		}
-
-		if !addedRoutes[stack] {
-			// Add link route for the gateway.
-			gwPrefix := netip.PrefixFrom(gwAddr, gwAddr.BitLen())
-			deviceCfg.NetworkInterfaceConfigInPod.Routes = append(deviceCfg.NetworkInterfaceConfigInPod.Routes, apis.RouteConfig{
-				Destination: gwPrefix.String(),
-				Scope:       unix.RT_SCOPE_LINK,
-				Table:       tableID,
-			})
-			// Add default route in the custom table.
-			deviceCfg.NetworkInterfaceConfigInPod.Routes = append(deviceCfg.NetworkInterfaceConfigInPod.Routes, apis.RouteConfig{
-				Destination: defaultPrefix.String(),
-				Gateway:     gwAddr.String(),
-				Table:       tableID,
-			})
-			addedRoutes[stack] = true
-		}
-		// Add source-based routing rule for the current IP address.
-		deviceCfg.NetworkInterfaceConfigInPod.Rules = append(deviceCfg.NetworkInterfaceConfigInPod.Rules, apis.RuleConfig{
-			Source:   ipStr,
+		// Match the host address only (/32 or /128), not its subnet prefix.
+		hostPrefix := netip.PrefixFrom(prefix.Addr(), prefix.Addr().BitLen())
+		cfg.Rules = append(cfg.Rules, apis.RuleConfig{
+			Source:   hostPrefix.String(),
 			Table:    tableID,
-			Priority: 32000,
+			Priority: sourceBasedRoutingRulePriority,
 		})
 	}
 }
