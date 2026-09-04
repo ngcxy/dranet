@@ -18,6 +18,7 @@ package driver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -301,6 +302,17 @@ func createSubinterfaceInNS(ctx context.Context, ns, deviceName string, config D
 		return fmt.Errorf("error creating subinterface on parent %s in namespace %s: %v", hostIfName, ns, err)
 	}
 
+	// Configure the subinterface (ethtool, vrf, routes, neighbors, rules)
+	if err := configureNetdevInNS(ctx, ns, deviceName, config, networkData.InterfaceName, resourceClaimStatusDevice); err != nil {
+		// Delete the child now rather than leaving it half configured until pod teardown.
+		if delErr := nsDeleteSubinterface(ns, networkData.InterfaceName); delErr != nil {
+			return errors.Join(err, fmt.Errorf("failed to delete subinterface %s after a configuration failure: %w", networkData.InterfaceName, delErr))
+		}
+		return err
+	}
+
+	// Report the device only after the configuration succeeds, so a failure
+	// leaves the status without a Ready condition or network data.
 	resourceClaimStatusDevice.WithConditions(
 		metav1apply.Condition().
 			WithType("Ready").
@@ -312,9 +324,7 @@ func createSubinterfaceInNS(ctx context.Context, ns, deviceName string, config D
 		WithHardwareAddress(networkData.HardwareAddress).
 		WithIPs(networkData.IPs...),
 	)
-
-	// Configure the subinterface (ethtool, vrf, routes, neighbors, rules)
-	return configureNetdevInNS(ctx, ns, deviceName, config, networkData.InterfaceName, resourceClaimStatusDevice)
+	return nil
 }
 
 // configureNetdevInNS applies common L3 configurations (ethtool, eBPF, VRF, routes, rules, and neighbors)
