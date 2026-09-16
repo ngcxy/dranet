@@ -25,6 +25,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 	"github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 	"k8s.io/klog/v2"
 )
 
@@ -35,16 +36,30 @@ type Handle struct {
 	*netlink.Handle
 }
 
+func defaultFamilies(nlFamilies []int) []int {
+	if len(nlFamilies) == 0 {
+		return []int{unix.NETLINK_ROUTE}
+	}
+	return nlFamilies
+}
+
+// NewHandle returns a handle for the given netlink families. If no family is
+// given it defaults to NETLINK_ROUTE only, unlike netlink.NewHandle which
+// also opens NETLINK_XFRM and NETLINK_NETFILTER sockets and fails when one of
+// them cannot be opened. Callers that need another family, such as
+// NETLINK_RDMA, must pass it explicitly.
 func NewHandle(nlFamilies ...int) (Handle, error) {
-	nlh, err := netlink.NewHandle(nlFamilies...)
+	nlh, err := netlink.NewHandle(defaultFamilies(nlFamilies)...)
 	if err != nil {
 		return Handle{}, err
 	}
 	return Handle{nlh}, nil
 }
 
+// NewHandleAt is NewHandle in the given network namespace, with the same
+// NETLINK_ROUTE default.
 func NewHandleAt(ns netns.NsHandle, nlFamilies ...int) (Handle, error) {
-	nlh, err := netlink.NewHandleAt(ns, nlFamilies...)
+	nlh, err := netlink.NewHandleAt(ns, defaultFamilies(nlFamilies)...)
 	if err != nil {
 		return Handle{}, err
 	}
