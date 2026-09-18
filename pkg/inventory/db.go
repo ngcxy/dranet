@@ -536,6 +536,24 @@ func (db *DB) addCloudAttributes(devices []resourceapi.Device) []resourceapi.Dev
 	return devices
 }
 
+// getDeviceIdentifiers extracts provider identifiers from device attributes.
+func getDeviceIdentifiers(device *resourceapi.Device) cloudprovider.DeviceIdentifiers {
+	id := cloudprovider.DeviceIdentifiers{}
+	if device == nil {
+		return id
+	}
+	if ifaceNameAttr, ok := device.Attributes[apis.AttrInterfaceName]; ok && ifaceNameAttr.StringValue != nil {
+		id.Name = *ifaceNameAttr.StringValue
+	}
+	if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
+		id.MAC = *macAttr.StringValue
+	}
+	if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
+		id.PCIAddress = *pciAttr.StringValue
+	}
+	return id
+}
+
 func (db *DB) getProviderAttributes(device *resourceapi.Device, instance cloudprovider.CloudInstance) map[resourceapi.QualifiedName]resourceapi.DeviceAttribute {
 	if instance == nil {
 		klog.Warningf("instance metadata is nil, cannot get provider attributes.")
@@ -547,16 +565,7 @@ func (db *DB) getProviderAttributes(device *resourceapi.Device, instance cloudpr
 		return nil
 	}
 
-	id := cloudprovider.DeviceIdentifiers{}
-	if ifaceNameAttr, ok := device.Attributes[apis.AttrInterfaceName]; ok && ifaceNameAttr.StringValue != nil {
-		id.Name = *ifaceNameAttr.StringValue
-	}
-	if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
-		id.MAC = *macAttr.StringValue
-	}
-	if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
-		id.PCIAddress = *pciAttr.StringValue
-	}
+	id := getDeviceIdentifiers(device)
 	if id.Name == "" && id.MAC == "" && id.PCIAddress == "" {
 		klog.Warningf("device %s has no identifiers, cannot get provider attributes.", device.Name)
 		return nil
@@ -574,15 +583,7 @@ func (db *DB) updateDeviceStore(devices []resourceapi.Device) {
 
 		// Cache the configuration if the provider returns one.
 		if db.instance != nil {
-			id := cloudprovider.DeviceIdentifiers{
-				Name: device.Name,
-			}
-			if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
-				id.MAC = *macAttr.StringValue
-			}
-			if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
-				id.PCIAddress = *pciAttr.StringValue
-			}
+			id := getDeviceIdentifiers(&device)
 
 			if conf := db.instance.GetDeviceConfig(id); conf != nil {
 				// A provider-advertised profile is only honored when a profile
@@ -630,13 +631,7 @@ func (db *DB) GetProfileConfig(deviceName string, claim *resourceapi.ResourceCla
 		return nil, fmt.Errorf("device %s not found in inventory", deviceName)
 	}
 
-	id := cloudprovider.DeviceIdentifiers{Name: deviceName}
-	if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
-		id.MAC = *macAttr.StringValue
-	}
-	if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
-		id.PCIAddress = *pciAttr.StringValue
-	}
+	id := getDeviceIdentifiers(&device)
 
 	return p.GetProfileConfig(id, claim, config)
 }
@@ -652,16 +647,11 @@ func (db *DB) ReleaseProfileConfig(deviceName string, claimUID types.UID, config
 	device, exists := db.deviceStore[deviceName]
 	db.mu.RUnlock()
 
-	id := cloudprovider.DeviceIdentifiers{Name: deviceName}
+	id := cloudprovider.DeviceIdentifiers{}
 	if exists {
 		// Device might have been removed from the node during teardown,
 		// but we populate identifiers if we still have them to aid cleanup.
-		if macAttr, ok := device.Attributes[apis.AttrMac]; ok && macAttr.StringValue != nil {
-			id.MAC = *macAttr.StringValue
-		}
-		if pciAttr, ok := device.Attributes[apis.AttrPCIAddress]; ok && pciAttr.StringValue != nil {
-			id.PCIAddress = *pciAttr.StringValue
-		}
+		id = getDeviceIdentifiers(&device)
 	}
 
 	return p.ReleaseProfileConfig(id, claimUID, config)

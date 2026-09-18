@@ -30,6 +30,7 @@ import (
 	"github.com/jaypipes/pcidb"
 	"github.com/vishvananda/netlink"
 	resourceapi "k8s.io/api/resource/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/dynamic-resource-allocation/deviceattribute"
 	"k8s.io/utils/ptr"
@@ -486,6 +487,73 @@ func (m *mockCloudInstance) GetDeviceAttributes(id cloudprovider.DeviceIdentifie
 
 func (m *mockCloudInstance) GetDeviceConfig(id cloudprovider.DeviceIdentifiers) *apis.NetworkConfig {
 	return nil
+}
+
+type identifierCheckingProvider struct {
+	mockCloudInstance
+	check func(string, cloudprovider.DeviceIdentifiers)
+}
+
+func (p *identifierCheckingProvider) GetDeviceConfig(id cloudprovider.DeviceIdentifiers) *apis.NetworkConfig {
+	p.check("GetDeviceConfig", id)
+	return nil
+}
+
+func (p *identifierCheckingProvider) GetProfileConfig(id cloudprovider.DeviceIdentifiers, _ *resourceapi.ResourceClaim, _ *apis.NetworkConfig) (*apis.NetworkConfig, error) {
+	p.check("GetProfileConfig", id)
+	return nil, nil
+}
+
+func (p *identifierCheckingProvider) ReleaseProfileConfig(id cloudprovider.DeviceIdentifiers, _ types.UID, _ *apis.NetworkConfig) error {
+	p.check("ReleaseProfileConfig", id)
+	return nil
+}
+
+func TestProviderIdentifiers(t *testing.T) {
+	for _, ifName := range []string{"enP22s22f0np0", ""} {
+		t.Run(fmt.Sprintf("ifName=%q", ifName), func(t *testing.T) {
+			device := resourceapi.Device{
+				Name: "pci-0000-00-01-0",
+				Attributes: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+					apis.AttrMac:        {StringValue: ptr.To("00:11:22:33:44:55")},
+					apis.AttrPCIAddress: {StringValue: ptr.To("0000:00:01.0")},
+				},
+			}
+			if ifName != "" {
+				device.Attributes[apis.AttrInterfaceName] = resourceapi.DeviceAttribute{StringValue: ptr.To(ifName)}
+			}
+			want := cloudprovider.DeviceIdentifiers{Name: ifName, MAC: "00:11:22:33:44:55", PCIAddress: "0000:00:01.0"}
+			var calls []string
+			provider := &identifierCheckingProvider{check: func(method string, got cloudprovider.DeviceIdentifiers) {
+				calls = append(calls, method)
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Errorf("%s identifiers mismatch (-want +got):\n%s", method, diff)
+				}
+			}}
+			db := New(WithCloudInstance(provider), WithProfileProvider(provider))
+			db.updateDeviceStore([]resourceapi.Device{device})
+			claim := &resourceapi.ResourceClaim{}
+			claim.UID = "claim-1"
+			config := &apis.NetworkConfig{Profile: "test-profile"}
+			if _, err := db.GetProfileConfig(device.Name, claim, config); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.ReleaseProfileConfig(device.Name, claim.UID, config); err != nil {
+				t.Fatal(err)
+			}
+
+			// Cleanup must still reach the provider after the device leaves inventory.
+			db.updateDeviceStore(nil)
+			want = cloudprovider.DeviceIdentifiers{}
+			if err := db.ReleaseProfileConfig(device.Name, claim.UID, config); err != nil {
+				t.Fatal(err)
+			}
+			wantCalls := []string{"GetDeviceConfig", "GetProfileConfig", "ReleaseProfileConfig", "ReleaseProfileConfig"}
+			if diff := cmp.Diff(wantCalls, calls); diff != "" {
+				t.Errorf("provider calls mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 func TestGetProviderAttributes(t *testing.T) {

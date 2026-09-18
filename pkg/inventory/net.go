@@ -218,9 +218,12 @@ func getTcxFilters(device netlink.Link) ([]string, bool) {
 
 // IsLACPBond reports whether ifName is an 802.3ad (LACP) bond.
 func IsLACPBond(ifName string) bool {
+	if ifName == "" {
+		return false
+	}
+
 	link, err := nlwrap.LinkByName(ifName)
 	if err != nil {
-		klog.Errorf("failed to get interface %s: %v", ifName, err)
 		return false
 	}
 

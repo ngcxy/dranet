@@ -27,7 +27,8 @@ import (
 type DeviceIdentifiers struct {
 	MAC        string `json:"mac_address,omitempty"`
 	PCIAddress string `json:"pci_address,omitempty"`
-	Name       string `json:"name"`
+	// Name is the local network interface name, or empty if unavailable.
+	Name string `json:"name"`
 }
 
 // CloudInstance defines the generic interface for all cloud providers.
