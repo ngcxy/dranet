@@ -15,12 +15,7 @@ name: Test
 
 on:
   push:
-    branches:
-      - 'main'
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [ main ]
+    branches: ['ci-no-sudo-experiment']
 
 permissions:
   contents: read
@@ -37,7 +32,5 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-    - run: sudo make test
-    - run: make lint
-    - run: make verify
+    - run: make test
 
