@@ -32,5 +32,9 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    # Record the runner's defaults, then lift the AppArmor restriction on
+    # unprivileged user namespaces (actions/runner-images#10443).
+    - run: sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined user.max_user_namespaces
+    - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
     - run: make test
 
