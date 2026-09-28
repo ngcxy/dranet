@@ -44,6 +44,7 @@ The following table lists the configurable parameters and their default values:
 | `args.inventoryPollBurst` | Number of inventory polls that can be run in a burst | binary default: `5` |
 | `args.moveIBInterfaces` | If true, InfiniBand (IPoIB) interfaces are moved into the pod network namespace | binary default: `true` |
 | `args.cloudProviderHint` | Hint for the cloud provider plugin (`GCE`, `AZURE`, `OKE`, `AWS`, `ALIBABA`, `CKS`, `webhook`, `NONE`); auto-detected if unset | binary default: `""` |
+| `args.cloudProviderOptions` | Options per provider, as a map of maps; see [Cloud provider options](#cloud-provider-options) | binary default: no options |
 | `args.profileProvider` | Provider for user profile configuration (`cloud`, `webhook`, `none`) | binary default: `cloud` |
 | `args.webhookURL` | HTTP, HTTPS, or Unix socket URL; required when either provider uses `webhook` | binary default: `""` |
 | `args.featureGates` | Comma-separated feature gate settings in `key=value` format | binary default: `""` |
@@ -85,3 +86,28 @@ Parameters can be set at install time using `--set` or a custom values file:
 helm upgrade --install dranet ./deployments/helm/dranet -n kube-system --set logVerbosity=6
 helm upgrade --install dranet ./deployments/helm/dranet -n kube-system -f my-values.yaml
 ```
+
+## Cloud provider options
+
+`args.cloudProviderOptions` is a map of providers to their options. The chart
+passes each option as one `--cloud-provider-options=<provider>.<option>=<value>`
+flag. The options of a provider apply only when that provider runs. With an
+explicit `args.cloudProviderHint` for another provider, DRANET stops at
+startup. Values must not contain secrets because DRANET logs its command-line
+flags.
+
+```yaml
+args:
+  cloudProviderOptions:
+    oke:
+      rdma-child-ipv4-cidr: "10.192.0.0/14"
+```
+
+With `--set`:
+
+```sh
+helm upgrade --install dranet ./deployments/helm/dranet -n kube-system \
+  --set args.cloudProviderOptions.oke.rdma-child-ipv4-cidr=10.192.0.0/14
+```
+
+Each provider documents its keys on its page of the user documentation.

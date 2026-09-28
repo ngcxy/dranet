@@ -17,12 +17,16 @@ limitations under the License.
 package discovery
 
 import (
+	"bytes"
 	"context"
+	"flag"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/dranet/pkg/cloudprovider/coreweave"
 )
 
@@ -85,5 +89,57 @@ func TestGetInstancePropertiesCKS(t *testing.T) {
 func TestGetInstancePropertiesCKSRequiresDependencies(t *testing.T) {
 	if _, err := GetInstanceProperties(context.Background(), CloudProviderHintCKS, "", Dependencies{}); err == nil {
 		t.Fatal("GetInstanceProperties() error = nil, want missing Kubernetes dependency error")
+	}
+}
+
+// captureLogs routes klog output to a buffer for one test.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	state := klog.CaptureState()
+	t.Cleanup(state.Restore)
+	var flags flag.FlagSet
+	klog.InitFlags(&flags)
+	if err := flags.Set("logtostderr", "false"); err != nil {
+		t.Fatalf("could not set klog flag logtostderr: %v", err)
+	}
+	var buf bytes.Buffer
+	klog.SetOutput(&buf)
+	return &buf
+}
+
+// Without a hint, discovery can pick another provider or none. The options
+// of the other providers then configure nothing, and DRANET keeps running.
+func TestGetInstancePropertiesIgnoresOptionsOfAnotherProvider(t *testing.T) {
+	logs := captureLogs(t)
+	options := ProviderOptions{CloudProviderHintOKE: {"rdma-child-ipv4-cidr": "10.192.0.0/14"}}
+	namespaces := []string{"oke"}
+	for _, hint := range testHints() {
+		options[hint] = map[string]string{"a": "1"}
+		namespaces = append(namespaces, namespace(hint))
+	}
+	instance, err := GetInstanceProperties(context.Background(), CloudProviderHintNone, "", Dependencies{ProviderOptions: options})
+	klog.Flush()
+	if err != nil || instance != nil {
+		t.Errorf("GetInstanceProperties() = %v, %v, want nil, nil", instance, err)
+	}
+	last := -1
+	for _, ns := range namespaces {
+		at := strings.Index(logs.String(), "Ignoring the "+ns+`.* cloud provider options, because the cloud provider is "NONE"`)
+		if at <= last {
+			t.Fatalf("GetInstanceProperties() logged %q, want one warning per provider in the order %v", logs.String(), namespaces)
+		}
+		last = at
+	}
+}
+
+// The OKE case parses its own options, so a bad key fails before any IMDS read.
+func TestGetInstancePropertiesParsesOKEOptions(t *testing.T) {
+	options := ProviderOptions{CloudProviderHintOKE: {"bogus": "1"}}
+	instance, err := GetInstanceProperties(context.Background(), CloudProviderHintOKE, "", Dependencies{ProviderOptions: options})
+	if want := `oke options: unknown option "bogus"`; err == nil || err.Error() != want {
+		t.Errorf("GetInstanceProperties() error = %v, want %q", err, want)
+	}
+	if instance != nil {
+		t.Errorf("GetInstanceProperties() = %v, want nil", instance)
 	}
 }

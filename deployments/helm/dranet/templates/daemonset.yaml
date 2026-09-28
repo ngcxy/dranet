@@ -75,6 +75,12 @@ spec:
             {{- if .Values.args.cloudProviderHint }}
             - --cloud-provider-hint={{ .Values.args.cloudProviderHint }}
             {{- end }}
+            {{- /* One flag per option. The schema keeps every value a string, so %s is safe. */}}
+            {{- range $provider, $options := .Values.args.cloudProviderOptions }}
+            {{- range $name, $value := $options }}
+            - {{ printf "--cloud-provider-options=%s.%s=%s" $provider $name $value | quote }}
+            {{- end }}
+            {{- end }}
             {{- if (hasKey .Values.args "profileProvider") }}
             - {{ printf "--profile-provider=%s" .Values.args.profileProvider | quote }}
             {{- end }}

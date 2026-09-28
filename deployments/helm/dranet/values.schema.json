@@ -103,6 +103,23 @@
           "enum": ["GCE", "AZURE", "OKE", "AWS", "ALIBABA", "CKS", "webhook", "NONE"],
           "description": "Hint for the cloud provider plugin; auto-detected if unset"
         },
+        "cloudProviderOptions": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Options per provider, passed as one flag per option; the options of a provider apply only when that provider runs",
+          "properties": {
+            "oke": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "rdma-child-ipv4-cidr": {
+                  "type": "string",
+                  "description": "Child address range of the oke-rdma profile"
+                }
+              }
+            }
+          }
+        },
         "profileProvider": {
           "type": "string",
           "enum": ["cloud", "webhook", "none"],
