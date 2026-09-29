@@ -51,6 +51,26 @@
     "metricsPath": {
       "type": "string"
     },
+    "podMonitor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "interval": {
+          "type": "string",
+          "pattern": "^[0-9]+(ns|us|ms|s|m|h)$",
+          "description": "Prometheus scrape interval, e.g. '30s'"
+        }
+      }
+    },
     "logVerbosity": {
       "type": "integer",
       "minimum": 0

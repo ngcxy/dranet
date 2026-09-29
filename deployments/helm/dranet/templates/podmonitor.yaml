@@ -1,0 +1,29 @@
+{{- if .Values.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "dranet.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dranet.labels" . | nindent 4 }}
+    {{- with .Values.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "dranet.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - path: /metrics
+      interval: {{ .Values.podMonitor.interval }}
+      relabelings:
+        # The dranet container declares no containerPorts (it runs with
+        # hostNetwork: true and binds metricsPort directly), so a named
+        # port/targetPort would match no targets. Point Prometheus at the
+        # pod IP and the configured metrics port directly instead.
+        - sourceLabels: [__meta_kubernetes_pod_ip]
+          targetLabel: __address__
+          replacement: "$1:{{ .Values.metricsPort | default 9177 }}"
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+{{- end }}
