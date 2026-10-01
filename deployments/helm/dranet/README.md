@@ -65,10 +65,11 @@ After the upgrade, restart those workloads.
 When `args.profileProvider` or `args.cloudProviderHint` is `webhook`, set
 `args.webhookURL` to the webhook endpoint.
 
-`prometheus.monitor.enabled` requires the `monitoring.coreos.com/v1`
-`PodMonitor` CRD (Prometheus Operator) to already be installed in the
-cluster; `helm install` fails otherwise. Leave it `false` on clusters
-without Prometheus Operator. Metrics remain scrapable without it via
+`prometheus.monitor.enabled` creates a PodMonitor for Prometheus Operator
+to scrape. The template checks for the `monitoring.coreos.com/v1` CRD via
+`.Capabilities.APIVersions` before rendering, so setting it to `true` on a
+cluster without Prometheus Operator installed is a silent no-op rather than
+a failed `helm install`. Metrics remain scrapable without it via
 annotation-based discovery, e.g. by setting `podAnnotations` to
 `prometheus.io/scrape: "true"` and `prometheus.io/port: "9177"`.
 
