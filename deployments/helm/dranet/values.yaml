@@ -19,13 +19,8 @@ logVerbosity: 4
 metricsPort: ~
 metricsPath: /healthz
 
-# PodMonitor for Prometheus Operator to scrape the dranet_driver_* metrics on
-# metricsPort (binary default 9177). Requires the monitoring.coreos.com/v1
-# PodMonitor CRD (Prometheus Operator) to be installed; leave disabled otherwise.
 podMonitor:
   enabled: false
-  # Extra labels on the PodMonitor object itself, e.g. to match a specific
-  # Prometheus instance's podMonitorSelector.
   labels: {}
   interval: 30s
 
