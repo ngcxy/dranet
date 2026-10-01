@@ -51,23 +51,29 @@
     "metricsPath": {
       "type": "string"
     },
-    "podMonitor": {
+    "prometheus": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": {
-          "type": "boolean"
-        },
-        "labels": {
+        "monitor": {
           "type": "object",
-          "additionalProperties": {
-            "type": "string"
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "labels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "interval": {
+              "type": "string",
+              "pattern": "^[0-9]+(ns|us|ms|s|m|h)$",
+              "description": "Prometheus scrape interval, e.g. '30s'"
+            }
           }
-        },
-        "interval": {
-          "type": "string",
-          "pattern": "^[0-9]+(ns|us|ms|s|m|h)$",
-          "description": "Prometheus scrape interval, e.g. '30s'"
         }
       }
     },

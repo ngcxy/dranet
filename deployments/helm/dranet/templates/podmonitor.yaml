@@ -1,4 +1,4 @@
-{{- if .Values.podMonitor.enabled }}
+{{- if .Values.prometheus.monitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -6,7 +6,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "dranet.labels" . | nindent 4 }}
-    {{- with .Values.podMonitor.labels }}
+    {{- with .Values.prometheus.monitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
@@ -16,7 +16,7 @@ spec:
   podMetricsEndpoints:
     - port: metrics
       path: /metrics
-      interval: {{ .Values.podMonitor.interval }}
+      interval: {{ .Values.prometheus.monitor.interval }}
       relabelings:
         - sourceLabels: [__meta_kubernetes_pod_node_name]
           targetLabel: node

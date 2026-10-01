@@ -19,10 +19,11 @@ logVerbosity: 4
 metricsPort: ~
 metricsPath: /healthz
 
-podMonitor:
-  enabled: false
-  labels: {}
-  interval: 30s
+prometheus:
+  monitor:
+    enabled: false
+    labels: {}
+    interval: 30s
 
 # DRANET daemon arguments. Omit a field to use the binary's built-in default.
 args: {}
