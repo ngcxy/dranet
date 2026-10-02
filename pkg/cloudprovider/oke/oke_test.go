@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/klog/v2"
@@ -57,6 +58,9 @@ func fakeSysfs(t *testing.T) {
 	dir := t.TempDir()
 	originalClassNet, originalPCIDevices, originalNetnsMode := sysClassNet, sysfsPCIDevices, ibCoreNetnsModeFile
 	originalSysctl, originalOCADir, originalAddresses := procSysNetIPv4Conf, ocaConfigDir, interfaceAddresses
+	originalRoutes, originalServiceHost := hostIPv4Routes, kubernetesServiceHost
+	hostIPv4Routes = func() ([]netip.Prefix, error) { return nil, nil }
+	kubernetesServiceHost = func() string { return "" }
 	sysClassNet = filepath.Join(dir, "class", "net")
 	sysfsPCIDevices = filepath.Join(dir, "bus", "pci", "devices")
 	ibCoreNetnsModeFile = filepath.Join(dir, "module", "ib_core", "netns_mode")
@@ -81,8 +85,19 @@ func fakeSysfs(t *testing.T) {
 	t.Cleanup(func() {
 		sysClassNet, sysfsPCIDevices, ibCoreNetnsModeFile = originalClassNet, originalPCIDevices, originalNetnsMode
 		procSysNetIPv4Conf, ocaConfigDir, interfaceAddresses = originalSysctl, originalOCADir, originalAddresses
+		hostIPv4Routes, kubernetesServiceHost = originalRoutes, originalServiceHost
 		fakeAddressTable = nil
 	})
+}
+
+// prefixes parses CIDRs for fakes and expected values.
+func prefixes(t *testing.T, cidrs ...string) []netip.Prefix {
+	t.Helper()
+	var result []netip.Prefix
+	for _, cidr := range cidrs {
+		result = append(result, netip.MustParsePrefix(cidr))
+	}
+	return result
 }
 
 // fakeInterface adds an interface with the given ARPHRD type to the fake sysfs.
@@ -293,22 +308,53 @@ func TestGetDeviceAttributes(t *testing.T) {
 }
 
 func TestGetDeviceAttributesRDMAFabric(t *testing.T) {
+	customRange, err := ParseOptions(map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/14"})
+	if err != nil {
+		t.Fatalf("ParseOptions() returned error: %v", err)
+	}
+	ipv4Fabric := func() *okeMetadata { return &okeMetadata{RDMAFabric: &rdmaFabric{IPv6: false, Planes: 0}} }
+	rdmaNIC := cloudprovider.DeviceIdentifiers{Name: "dev1"}
 	tests := []struct {
 		name     string
 		instance *OKEInstance
+		id       cloudprovider.DeviceIdentifiers
 		want     map[resourceapi.QualifiedName]resourceapi.DeviceAttribute
 	}{
 		{
-			name:     "IPv4 fabric with zero planes",
-			instance: newOKEInstance(&okeMetadata{RDMAFabric: &rdmaFabric{IPv6: false, Planes: 0}}, nil),
+			name:     "IPv4 fabric with zero planes and the default child range",
+			instance: newOKEInstance(ipv4Fabric(), nil),
+			id:       rdmaNIC,
 			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
-				AttrOKERDMAFabricIPv6:   {BoolValue: ptr.To(false)},
-				AttrOKERDMAFabricPlanes: {IntValue: ptr.To[int64](0)},
+				AttrOKERDMAFabricIPv6:    {BoolValue: ptr.To(false)},
+				AttrOKERDMAFabricPlanes:  {IntValue: ptr.To[int64](0)},
+				AttrOKERDMAChildIPv4CIDR: {StringValue: ptr.To("10.208.0.0/12")},
 			},
 		},
 		{
-			name:     "IPv6 fabric with multiple planes",
-			instance: newOKEInstance(&okeMetadata{RDMAFabric: &rdmaFabric{IPv6: true, Planes: 8}}, nil),
+			name:     "IPv4 fabric with a custom child range",
+			instance: newOKEInstance(ipv4Fabric(), nil, customRange...),
+			id:       rdmaNIC,
+			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+				AttrOKERDMAFabricIPv6:    {BoolValue: ptr.To(false)},
+				AttrOKERDMAFabricPlanes:  {IntValue: ptr.To[int64](0)},
+				AttrOKERDMAChildIPv4CIDR: {StringValue: ptr.To("10.192.0.0/14")},
+			},
+		},
+		{
+			// The child range describes the node, like the fabric attributes.
+			name:     "a device that is not an RDMA NIC gets the child range too",
+			instance: newOKEInstance(ipv4Fabric(), nil, customRange...),
+			id:       cloudprovider.DeviceIdentifiers{Name: "pci-0000-00-03-0", MAC: "02:00:17:00:00:01", PCIAddress: "0000:00:03.0"},
+			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
+				AttrOKERDMAFabricIPv6:    {BoolValue: ptr.To(false)},
+				AttrOKERDMAFabricPlanes:  {IntValue: ptr.To[int64](0)},
+				AttrOKERDMAChildIPv4CIDR: {StringValue: ptr.To("10.192.0.0/14")},
+			},
+		},
+		{
+			name:     "IPv6 fabric with multiple planes has no child range",
+			instance: newOKEInstance(&okeMetadata{RDMAFabric: &rdmaFabric{IPv6: true, Planes: 8}}, nil, customRange...),
+			id:       rdmaNIC,
 			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
 				AttrOKERDMAFabricIPv6:   {BoolValue: ptr.To(true)},
 				AttrOKERDMAFabricPlanes: {IntValue: ptr.To[int64](8)},
@@ -316,16 +362,23 @@ func TestGetDeviceAttributesRDMAFabric(t *testing.T) {
 		},
 		{
 			name:     "fabric data is absent",
-			instance: newOKEInstance(&okeMetadata{RackId: "fake-rack-id"}, nil),
+			instance: newOKEInstance(&okeMetadata{RackId: "fake-rack-id"}, nil, customRange...),
+			id:       rdmaNIC,
 			want: map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{
 				AttrOKERackId: {StringValue: ptr.To("fake-rack-id")},
 			},
+		},
+		{
+			name:     "metadata is not loaded yet",
+			instance: newOKEInstance(nil, nil, customRange...),
+			id:       rdmaNIC,
+			want:     map[resourceapi.QualifiedName]resourceapi.DeviceAttribute{},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := tt.instance.GetDeviceAttributes(cloudprovider.DeviceIdentifiers{Name: "dev1"})
+			got := tt.instance.GetDeviceAttributes(tt.id)
 			if diff := cmp.Diff(tt.want, got, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("GetDeviceAttributes() returned unexpected diff (-want, +got):\n%s", diff)
 			}
@@ -617,6 +670,13 @@ func TestGetProfileConfig(t *testing.T) {
 		rdmaLinkLayer string
 		// noInterface leaves the PCI device without a network interface.
 		noInterface bool
+		// options are the cloud provider options of the instance.
+		options map[string]string
+		// vnicSubnets, hostRoutes and serviceHost are what the child range
+		// check sees; nil vnicSubnets leaves the IMDS read unset.
+		vnicSubnets []string
+		hostRoutes  []string
+		serviceHost string
 		want        *apis.NetworkConfig
 		wantErr     string
 	}{
@@ -904,6 +964,146 @@ func TestGetProfileConfig(t *testing.T) {
 			wantErr:   "could not derive the OKE child address for rdma16: RDMA NIC index 16 is above the largest supported index 15",
 		},
 		{
+			name:      "large child range does not admit RDMA NIC index 16",
+			config:    profileConfig(apis.InterfaceConfig{}),
+			metadata:  ipv4Fabric(),
+			options:   map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/12"},
+			ifName:    "rdma16",
+			addresses: []string{"10.226.13.19/12"},
+			wantErr:   "RDMA NIC index 16 is above the largest supported index 15",
+		},
+		{
+			name:      "unnamed RDMA NIC with an address of index 16",
+			config:    profileConfig(apis.InterfaceConfig{}),
+			metadata:  ipv4Fabric(),
+			ifName:    "ens3f0",
+			addresses: []string{"10.226.13.19/12"},
+			wantErr:   "RDMA NIC index 16 is above the largest supported index 15",
+		},
+		{
+			name:   "RDMA NIC outside the child range",
+			config: profileConfig(apis.InterfaceConfig{}),
+			metadata: &okeMetadata{
+				RDMAFabric:  &rdmaFabric{IPv6: false},
+				PrimaryVNIC: &primaryVNIC{IPv4: netip.MustParseAddr("10.140.77.19"), Subnet: netip.MustParsePrefix("10.140.64.0/18")},
+			},
+			options:   map[string]string{"rdma-child-ipv4-cidr": "10.222.0.0/15"},
+			ifName:    "rdma8",
+			addresses: []string{"10.226.13.19/12"},
+			wantErr:   "could not derive the OKE child address for rdma8: RDMA NIC index 8 with a /18 primary VNIC subnet is outside the child range 10.222.0.0/15; a /14 child range",
+		},
+		{
+			name:        "child range clear of the test cluster networks",
+			config:      profileConfig(apis.InterfaceConfig{}),
+			metadata:    ipv4Fabric(),
+			ifName:      "rdma0",
+			addresses:   []string{"10.224.13.19/12"},
+			vnicSubnets: []string{"10.140.64.0/19", "10.140.128.0/17"},
+			hostRoutes:  []string{"10.140.64.0/19", "10.140.131.213/32"},
+			serviceHost: "10.96.0.1",
+			want:        rdma0Config,
+		},
+		{
+			name:        "child range overlaps a pod VNIC subnet",
+			config:      profileConfig(apis.InterfaceConfig{}),
+			metadata:    ipv4Fabric(),
+			ifName:      "rdma0",
+			addresses:   []string{"10.224.13.19/12"},
+			vnicSubnets: []string{"10.140.64.0/19", "10.210.0.0/16"},
+			wantErr:     "could not use the OKE child range for rdma0: VNIC subnet 10.210.0.0/16 overlaps the Dranet child range 10.208.0.0/12",
+		},
+		{
+			// The subnet base is outside the range, so only an overlap check finds it.
+			name:        "VNIC subnet wider than the child range",
+			config:      profileConfig(apis.InterfaceConfig{}),
+			metadata:    ipv4Fabric(),
+			ifName:      "rdma0",
+			addresses:   []string{"10.224.13.19/12"},
+			vnicSubnets: []string{"10.140.64.0/19", "10.0.0.0/8"},
+			wantErr:     "could not use the OKE child range for rdma0: VNIC subnet 10.0.0.0/8 overlaps the Dranet child range 10.208.0.0/12",
+		},
+		{
+			name:       "child range overlaps a host route",
+			config:     profileConfig(apis.InterfaceConfig{}),
+			metadata:   ipv4Fabric(),
+			ifName:     "rdma0",
+			addresses:  []string{"10.224.13.19/12"},
+			hostRoutes: []string{"10.140.64.0/19", "10.212.3.0/24"},
+			wantErr:    "could not use the OKE child range for rdma0: host route 10.212.3.0/24 overlaps the Dranet child range 10.208.0.0/12",
+		},
+		{
+			name:       "host route equal to the child range",
+			config:     profileConfig(apis.InterfaceConfig{}),
+			metadata:   ipv4Fabric(),
+			ifName:     "rdma0",
+			addresses:  []string{"10.224.13.19/12"},
+			hostRoutes: []string{"10.208.0.0/12"},
+			wantErr:    "could not use the OKE child range for rdma0: host route 10.208.0.0/12 overlaps the Dranet child range 10.208.0.0/12",
+		},
+		{
+			name:       "wider host route covers the child range",
+			config:     profileConfig(apis.InterfaceConfig{}),
+			metadata:   ipv4Fabric(),
+			ifName:     "rdma0",
+			addresses:  []string{"10.224.13.19/12"},
+			hostRoutes: []string{"10.192.0.0/11"},
+			wantErr:    "could not use the OKE child range for rdma0: host route 10.192.0.0/11 overlaps the Dranet child range 10.208.0.0/12",
+		},
+		{
+			name:       "default route does not claim the child range",
+			config:     profileConfig(apis.InterfaceConfig{}),
+			metadata:   ipv4Fabric(),
+			ifName:     "rdma0",
+			addresses:  []string{"10.224.13.19/12"},
+			hostRoutes: []string{"0.0.0.0/0"},
+			want:       rdma0Config,
+		},
+		{
+			name:        "Kubernetes service address inside the child range",
+			config:      profileConfig(apis.InterfaceConfig{}),
+			metadata:    ipv4Fabric(),
+			ifName:      "rdma0",
+			addresses:   []string{"10.224.13.19/12"},
+			serviceHost: "10.208.0.1",
+			wantErr:     "could not use the OKE child range for rdma0: the Kubernetes service address 10.208.0.1 is inside the Dranet child range 10.208.0.0/12",
+		},
+		{
+			name:      "custom child range on the first RDMA NIC",
+			config:    profileConfig(apis.InterfaceConfig{}),
+			metadata:  ipv4Fabric(),
+			options:   map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/14"},
+			ifName:    "rdma0",
+			addresses: []string{"10.224.13.19/12"},
+			want: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{
+					Type:        apis.InterfaceTypeIPVLAN,
+					Addresses:   []string{"10.192.13.19/14"},
+					ARPIgnore:   ptr.To[int32](1),
+					ARPAnnounce: ptr.To[int32](2),
+				},
+				Routes: []apis.RouteConfig{{Destination: "10.192.0.0/14", Source: "10.192.13.19", Scope: unix.RT_SCOPE_LINK, Table: 100}},
+				Rules:  []apis.RuleConfig{{Priority: apis.SourceRoutingRulePriority, Source: "10.192.13.19/32", Table: 100}},
+			},
+		},
+		{
+			name:      "custom child range on the last RDMA NIC",
+			config:    profileConfig(apis.InterfaceConfig{}),
+			metadata:  ipv4Fabric(),
+			options:   map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/12"},
+			ifName:    "rdma15",
+			addresses: []string{"10.225.237.19/12"},
+			want: &apis.NetworkConfig{
+				Interface: apis.InterfaceConfig{
+					Type:        apis.InterfaceTypeIPVLAN,
+					Addresses:   []string{"10.193.237.19/12"},
+					ARPIgnore:   ptr.To[int32](1),
+					ARPAnnounce: ptr.To[int32](2),
+				},
+				Routes: []apis.RouteConfig{{Destination: "10.192.0.0/12", Source: "10.193.237.19", Scope: unix.RT_SCOPE_LINK, Table: 115}},
+				Rules:  []apis.RuleConfig{{Priority: apis.SourceRoutingRulePriority, Source: "10.193.237.19/32", Table: 115}},
+			},
+		},
+		{
 			name:      "missing arp_ignore",
 			config:    profileConfig(apis.InterfaceConfig{}),
 			metadata:  ipv4Fabric(),
@@ -1068,10 +1268,21 @@ func TestGetProfileConfig(t *testing.T) {
 				fakeNetnsMode(t, tt.netnsMode)
 			}
 
-			instance := newOKEInstance(tt.metadata, nil)
+			options, err := ParseOptions(tt.options)
+			if err != nil {
+				t.Fatalf("ParseOptions() returned error: %v", err)
+			}
+			instance := newOKEInstance(tt.metadata, nil, options...)
 			if tt.ocaConfig != nil {
 				instance.ocaConfig = *tt.ocaConfig
 			}
+			if tt.vnicSubnets != nil {
+				subnets := prefixes(t, tt.vnicSubnets...)
+				instance.readVNICSubnets = func(context.Context) ([]netip.Prefix, error) { return subnets, nil }
+			}
+			routes := prefixes(t, tt.hostRoutes...)
+			hostIPv4Routes = func() ([]netip.Prefix, error) { return routes, nil }
+			kubernetesServiceHost = func() string { return tt.serviceHost }
 			id := cloudprovider.DeviceIdentifiers{Name: tt.ifName, PCIAddress: "0000:0c:00.0", MAC: tt.mac}
 			got, err := instance.GetProfileConfig(id, nil, tt.config)
 			if tt.wantErr != "" {
@@ -2451,6 +2662,102 @@ func TestLoadOCARDMAConfig(t *testing.T) {
 	})
 }
 
+func TestParseOptions(t *testing.T) {
+	prefix := func(a, b, c, d byte, bits int) netip.Prefix {
+		return netip.PrefixFrom(netip.AddrFrom4([4]byte{a, b, c, d}), bits)
+	}
+	tests := []struct {
+		name    string
+		options map[string]string
+		want    netip.Prefix
+		wantErr string
+	}{
+		{name: "no options keep the default range", want: prefix(10, 208, 0, 0, 12)},
+		{name: "empty map keeps the default range", options: map[string]string{}, want: prefix(10, 208, 0, 0, 12)},
+		{name: "shortest prefix length", options: map[string]string{"rdma-child-ipv4-cidr": "10.0.0.0/8"}, want: prefix(10, 0, 0, 0, 8)},
+		{name: "range for a /18 subnet", options: map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/14"}, want: prefix(10, 192, 0, 0, 14)},
+		{name: "range for a /24 subnet", options: map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/20"}, want: prefix(10, 192, 0, 0, 20)},
+		{name: "longest prefix length", options: map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/30"}, want: prefix(10, 192, 0, 0, 30)},
+		{name: "prefix length below the limit", options: map[string]string{"rdma-child-ipv4-cidr": "8.0.0.0/7"}, wantErr: "must have a prefix length from 8 to 30"},
+		{name: "prefix length above the limit", options: map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/31"}, wantErr: "must have a prefix length from 8 to 30"},
+		{name: "prefix length above 32", options: map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/33"}, wantErr: "option rdma-child-ipv4-cidr"},
+		{name: "not in masked form", options: map[string]string{"rdma-child-ipv4-cidr": "10.193.0.0/14"}, wantErr: "is not in masked form, use 10.192.0.0/14"},
+		{name: "IPv6 range", options: map[string]string{"rdma-child-ipv4-cidr": "fd00::/16"}, wantErr: "is not an IPv4 prefix"},
+		{name: "this-network range", options: map[string]string{"rdma-child-ipv4-cidr": "0.0.0.0/8"}, wantErr: "overlaps the special-purpose range 0.0.0.0/8"},
+		{name: "loopback range", options: map[string]string{"rdma-child-ipv4-cidr": "127.0.0.0/8"}, wantErr: "overlaps the special-purpose range 127.0.0.0/8"},
+		{name: "range that contains the link-local range", options: map[string]string{"rdma-child-ipv4-cidr": "169.0.0.0/8"}, wantErr: "overlaps the special-purpose range 169.254.0.0/16"},
+		{name: "multicast range", options: map[string]string{"rdma-child-ipv4-cidr": "224.0.0.0/8"}, wantErr: "overlaps the special-purpose range 224.0.0.0/4"},
+		{name: "reserved range", options: map[string]string{"rdma-child-ipv4-cidr": "240.0.0.0/8"}, wantErr: "overlaps the special-purpose range 240.0.0.0/4"},
+		{name: "range next to the loopback range", options: map[string]string{"rdma-child-ipv4-cidr": "126.0.0.0/8"}, want: prefix(126, 0, 0, 0, 8)},
+		{name: "address without a prefix length", options: map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0"}, wantErr: "option rdma-child-ipv4-cidr"},
+		{name: "empty value", options: map[string]string{"rdma-child-ipv4-cidr": ""}, wantErr: "option rdma-child-ipv4-cidr"},
+		{name: "unknown key", options: map[string]string{"unknown": "1"}, wantErr: `unknown option "unknown"`},
+		{name: "valid key next to an unknown key", options: map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/14", "unknown": "1"}, wantErr: `unknown option "unknown"`},
+		{name: "the error names the first key", options: map[string]string{"b": "1", "a": "1", "c": "1"}, wantErr: `unknown option "a"`},
+		{name: "the flag key with the oke. prefix is unknown here", options: map[string]string{"oke.rdma-child-ipv4-cidr": "10.192.0.0/14"}, wantErr: `unknown option "oke.rdma-child-ipv4-cidr"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			options, err := ParseOptions(tt.options)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("ParseOptions() error = %v, want %q", err, tt.wantErr)
+				}
+				if options != nil {
+					t.Errorf("ParseOptions() returned %d options with an error", len(options))
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseOptions() returned error: %v", err)
+			}
+			if got := newOKEInstance(nil, nil, options...).childIPv4Range; got != tt.want {
+				t.Errorf("child range = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+// GetInstance is the only caller that passes options in production, so the
+// test goes through it with a fake IMDS.
+func TestGetInstanceAppliesOptions(t *testing.T) {
+	tests := []struct {
+		name    string
+		options map[string]string
+		want    netip.Prefix
+	}{
+		{name: "no options keep the default range", want: netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 208, 0, 0}), 12)},
+		{name: "child range option", options: map[string]string{"rdma-child-ipv4-cidr": "10.192.0.0/14"}, want: netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 192, 0, 0}), 14)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fakeSysfs(t)
+			server := rdmaNodeServer(t, newRDMANodeRequests(), serveVNIC)
+			original := imdsEndpoint
+			imdsEndpoint = server.URL
+			t.Cleanup(func() { imdsEndpoint = original })
+
+			options, err := ParseOptions(tt.options)
+			if err != nil {
+				t.Fatalf("ParseOptions() returned error: %v", err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			got, err := GetInstance(ctx, options...)
+			if err != nil {
+				t.Fatalf("GetInstance() returned error: %v", err)
+			}
+			instance, ok := got.(*OKEInstance)
+			if !ok {
+				t.Fatalf("GetInstance() = %T, want *OKEInstance", got)
+			}
+			if instance.childIPv4Range != tt.want {
+				t.Errorf("child range = %s, want %s", instance.childIPv4Range, tt.want)
+			}
+		})
+	}
+}
+
 func TestDeriveRDMAIPv4(t *testing.T) {
 	defaultRange := netip.MustParsePrefix(okeRDMAParentIPv4CIDR)
 	vnicIn := func(subnet string) *primaryVNIC {
@@ -2461,15 +2768,19 @@ func TestDeriveRDMAIPv4(t *testing.T) {
 		vnic        *primaryVNIC
 		nicIndex    int
 		parentRange netip.Prefix
-		wantParent  string
-		wantChild   string
-		wantErr     string
+		// childRange is the default range when empty, and no prefix for "none".
+		childRange string
+		wantParent string
+		wantChild  string
+		wantErr    string
+		// wantFullErr pins the whole message, for rows about the hint.
+		wantFullErr string
 	}{
 		{name: "RDMA NIC index 0 on a /19 subnet", vnic: testVNIC(), nicIndex: 0, parentRange: defaultRange, wantParent: "10.224.13.19", wantChild: "10.208.13.19"},
 		{name: "RDMA NIC index 1 on a /19 subnet", vnic: testVNIC(), nicIndex: 1, parentRange: defaultRange, wantParent: "10.224.45.19", wantChild: "10.208.45.19"},
 		{name: "RDMA NIC index 8 on a /19 subnet", vnic: testVNIC(), nicIndex: 8, parentRange: defaultRange, wantParent: "10.225.13.19", wantChild: "10.209.13.19"},
 		{name: "RDMA NIC index 15 on a /19 subnet", vnic: testVNIC(), nicIndex: 15, parentRange: defaultRange, wantParent: "10.225.237.19", wantChild: "10.209.237.19"},
-		{name: "RDMA NIC index 16 on a /19 subnet", vnic: testVNIC(), nicIndex: 16, parentRange: defaultRange, wantErr: "RDMA NIC index 16 is above the largest supported index 15"},
+		{name: "RDMA NIC index 16 on a /19 subnet", vnic: testVNIC(), nicIndex: 16, parentRange: defaultRange, wantFullErr: "RDMA NIC index 16 is above the largest supported index 15"},
 		{name: "RDMA NIC index 15 on a /24 subnet", vnic: vnicIn("10.140.77.0/24"), nicIndex: 15, parentRange: defaultRange, wantParent: "10.224.15.19", wantChild: "10.208.15.19"},
 		{name: "RDMA NIC index 16 fits the child range on a /24 subnet", vnic: vnicIn("10.140.77.0/24"), nicIndex: 16, parentRange: defaultRange, wantErr: "RDMA NIC index 16 is above the largest supported index 15"},
 		{name: "RDMA NIC index 154 would give table 254", vnic: vnicIn("10.140.77.0/24"), nicIndex: 154, parentRange: defaultRange, wantErr: "RDMA NIC index 154 is above the largest supported index 15"},
@@ -2477,6 +2788,7 @@ func TestDeriveRDMAIPv4(t *testing.T) {
 		{name: "RDMA NIC index 1 on a /20 subnet", vnic: vnicIn("10.140.64.0/20"), nicIndex: 1, parentRange: defaultRange, wantParent: "10.224.29.19", wantChild: "10.208.29.19"},
 		{name: "RDMA NIC index 7 on a /18 subnet", vnic: vnicIn("10.140.64.0/18"), nicIndex: 7, parentRange: defaultRange, wantParent: "10.225.205.19", wantChild: "10.209.205.19"},
 		{name: "RDMA NIC index 8 on a /18 subnet", vnic: vnicIn("10.140.64.0/18"), nicIndex: 8, parentRange: defaultRange, wantParent: "10.226.13.19", wantChild: "10.210.13.19"},
+		{name: "RDMA NIC index 8 on a /18 subnet with a /15 range", vnic: vnicIn("10.140.64.0/18"), nicIndex: 8, parentRange: defaultRange, childRange: "10.222.0.0/15", wantFullErr: "RDMA NIC index 8 with a /18 primary VNIC subnet is outside the child range 10.222.0.0/15; a /14 child range holds all 16 RDMA NIC indexes of a /18 subnet"},
 		{name: "RDMA NIC index 15 on a /16 subnet", vnic: vnicIn("10.140.0.0/16"), nicIndex: 15, parentRange: defaultRange, wantParent: "10.239.77.19", wantChild: "10.223.77.19"},
 		{name: "RDMA NIC index 8 on a /15 subnet", vnic: vnicIn("10.140.0.0/15"), nicIndex: 8, parentRange: netip.MustParsePrefix("172.0.0.0/8"), wantErr: "RDMA NIC index 8 with a /15 primary VNIC subnet is outside the child range 10.208.0.0/12"},
 		{name: "RDMA NIC index 0 in a /16 OCA network", vnic: testVNIC(), nicIndex: 0, parentRange: netip.MustParsePrefix("192.168.0.0/16"), wantParent: "192.168.13.19", wantChild: "10.208.13.19"},
@@ -2487,10 +2799,44 @@ func TestDeriveRDMAIPv4(t *testing.T) {
 		{name: "VNIC subnet inside the child range", vnic: &primaryVNIC{IPv4: netip.MustParseAddr("10.208.5.5"), Subnet: netip.MustParsePrefix("10.208.0.0/19")}, parentRange: defaultRange, wantErr: "overlaps the Dranet child range"},
 		{name: "VNIC outside its subnet", vnic: &primaryVNIC{IPv4: netip.MustParseAddr("10.140.200.19"), Subnet: netip.MustParsePrefix("10.140.64.0/19")}, parentRange: defaultRange, wantErr: "is outside its subnet"},
 		{name: "missing VNIC", parentRange: defaultRange, wantErr: "not available"},
+		{name: "offset equal to the child range size", vnic: &primaryVNIC{IPv4: netip.MustParseAddr("10.140.64.0"), Subnet: netip.MustParsePrefix("10.140.64.0/18")}, nicIndex: 8, parentRange: defaultRange, childRange: "10.222.0.0/15", wantErr: "outside the child range 10.222.0.0/15"},
+		{name: "custom /15 range, RDMA NIC index 0", vnic: testVNIC(), nicIndex: 0, parentRange: defaultRange, childRange: "10.192.0.0/15", wantParent: "10.224.13.19", wantChild: "10.192.13.19"},
+		{name: "custom /15 range, RDMA NIC index 15", vnic: testVNIC(), nicIndex: 15, parentRange: defaultRange, childRange: "10.192.0.0/15", wantParent: "10.225.237.19", wantChild: "10.193.237.19"},
+		{name: "custom /14 range, RDMA NIC index 8 on a /18 subnet", vnic: vnicIn("10.140.64.0/18"), nicIndex: 8, parentRange: defaultRange, childRange: "10.192.0.0/14", wantParent: "10.226.13.19", wantChild: "10.194.13.19"},
+		{name: "custom /14 range, RDMA NIC index 15 on a /18 subnet", vnic: vnicIn("10.140.64.0/18"), nicIndex: 15, parentRange: defaultRange, childRange: "10.192.0.0/14", wantParent: "10.227.205.19", wantChild: "10.195.205.19"},
+		{name: "custom /12 range, RDMA NIC index 15", vnic: testVNIC(), nicIndex: 15, parentRange: defaultRange, childRange: "10.192.0.0/12", wantParent: "10.225.237.19", wantChild: "10.193.237.19"},
+		{name: "custom /12 range does not admit RDMA NIC index 16", vnic: testVNIC(), nicIndex: 16, parentRange: defaultRange, childRange: "10.192.0.0/12", wantFullErr: "RDMA NIC index 16 is above the largest supported index 15"},
+		{name: "custom /12 range, RDMA NIC index 15 on a /16 subnet", vnic: vnicIn("10.140.0.0/16"), nicIndex: 15, parentRange: defaultRange, childRange: "10.192.0.0/12", wantParent: "10.239.77.19", wantChild: "10.207.77.19"},
+		{name: "custom /20 range, RDMA NIC index 15 on a /24 subnet", vnic: vnicIn("10.140.77.0/24"), nicIndex: 15, parentRange: defaultRange, childRange: "10.192.0.0/20", wantParent: "10.224.15.19", wantChild: "10.192.15.19"},
+		{name: "custom range as large as the subnet, RDMA NIC index 0", vnic: vnicIn("10.140.77.0/24"), nicIndex: 0, parentRange: defaultRange, childRange: "10.192.0.0/24", wantParent: "10.224.0.19", wantChild: "10.192.0.19"},
+		{name: "custom range as large as the subnet, RDMA NIC index 1", vnic: vnicIn("10.140.77.0/24"), nicIndex: 1, parentRange: defaultRange, childRange: "10.192.0.0/24", wantFullErr: "RDMA NIC index 1 with a /24 primary VNIC subnet is outside the child range 10.192.0.0/24; a /20 child range holds all 16 RDMA NIC indexes of a /24 subnet"},
+		{name: "custom range smaller than the subnet", vnic: vnicIn("10.140.77.0/24"), nicIndex: 0, parentRange: defaultRange, childRange: "10.192.0.0/28", wantFullErr: "the child range 10.192.0.0/28 is smaller than the primary VNIC subnet 10.140.77.0/24"},
+		{name: "no hint when no valid range holds 16 RDMA NICs", vnic: vnicIn("10.128.0.0/11"), nicIndex: 8, parentRange: netip.MustParsePrefix("172.0.0.0/6"), childRange: "11.0.0.0/8", wantFullErr: "RDMA NIC index 8 with a /11 primary VNIC subnet is outside the child range 11.0.0.0/8"},
+		{name: "hint with the shortest valid prefix length", vnic: vnicIn("10.128.0.0/12"), nicIndex: 8, parentRange: netip.MustParsePrefix("172.0.0.0/6"), childRange: "11.0.0.0/9", wantFullErr: "RDMA NIC index 8 with a /12 primary VNIC subnet is outside the child range 11.0.0.0/9; a /8 child range holds all 16 RDMA NIC indexes of a /12 subnet"},
+		{name: "custom range overlaps the OCA network", vnic: testVNIC(), parentRange: defaultRange, childRange: "10.224.0.0/14", wantErr: "OCA RDMA network 10.224.0.0/12 overlaps the Dranet child range 10.224.0.0/14"},
+		{name: "custom range overlaps the VNIC subnet", vnic: testVNIC(), parentRange: defaultRange, childRange: "10.140.0.0/15", wantErr: "primary VNIC subnet 10.140.64.0/19 overlaps the Dranet child range 10.140.0.0/15"},
+		{name: "VNIC subnet inside the default range with a custom range", vnic: &primaryVNIC{IPv4: netip.MustParseAddr("10.222.5.5"), Subnet: netip.MustParsePrefix("10.222.0.0/19")}, parentRange: defaultRange, childRange: "10.192.0.0/15", wantParent: "10.224.5.5", wantChild: "10.192.5.5"},
+		{name: "no child range", vnic: testVNIC(), parentRange: defaultRange, childRange: "none", wantErr: "is not an IPv4 prefix"},
+		{name: "IPv6 child range", vnic: testVNIC(), parentRange: defaultRange, childRange: "fd00::/16", wantErr: "is not an IPv4 prefix"},
+		{name: "unmasked child range", vnic: testVNIC(), parentRange: defaultRange, childRange: "10.222.1.0/15", wantErr: "is not in masked form, use 10.222.0.0/15"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			parent, child, err := deriveRDMAIPv4(tt.vnic, tt.nicIndex, tt.parentRange)
+			childRange := netip.MustParsePrefix("10.208.0.0/12")
+			switch tt.childRange {
+			case "":
+			case "none":
+				childRange = netip.Prefix{}
+			default:
+				childRange = netip.MustParsePrefix(tt.childRange)
+			}
+			parent, child, err := deriveRDMAIPv4(tt.vnic, tt.nicIndex, tt.parentRange, childRange)
+			if tt.wantFullErr != "" {
+				if err == nil || err.Error() != tt.wantFullErr {
+					t.Fatalf("deriveRDMAIPv4() error = %v, want %q", err, tt.wantFullErr)
+				}
+				return
+			}
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 					t.Fatalf("deriveRDMAIPv4() error = %v, want %q", err, tt.wantErr)
@@ -2842,4 +3188,129 @@ func TestStartWarnsInExclusiveNetnsMode(t *testing.T) {
 	if want := "exclusive network namespace mode"; !strings.Contains(logs.String(), want) {
 		t.Errorf("start() logged %q, want it to contain %q", logs.String(), want)
 	}
+}
+
+func TestParseVNICSubnets(t *testing.T) {
+	tests := []struct {
+		name  string
+		vnics []imdsVNICMetadata
+		want  []netip.Prefix
+	}{
+		{name: "no VNICs"},
+		{name: "primary VNIC", vnics: []imdsVNICMetadata{{SubnetCidrBlock: "10.140.64.0/19"}}, want: prefixes(t, "10.140.64.0/19")},
+		{
+			name:  "primary and pod VNICs",
+			vnics: []imdsVNICMetadata{{SubnetCidrBlock: "10.140.64.0/19"}, {SubnetCidrBlock: "10.140.128.0/17"}, {SubnetCidrBlock: "10.140.128.0/17"}},
+			want:  prefixes(t, "10.140.64.0/19", "10.140.128.0/17", "10.140.128.0/17"),
+		},
+		{
+			name:  "extra subnet CIDR blocks",
+			vnics: []imdsVNICMetadata{{SubnetCidrBlock: "10.0.3.0/24", SubnetCidrBlocks: []string{"10.0.3.0/24", "172.16.3.0/24"}}},
+			want:  prefixes(t, "10.0.3.0/24", "10.0.3.0/24", "172.16.3.0/24"),
+		},
+		{name: "unmasked subnet", vnics: []imdsVNICMetadata{{SubnetCidrBlock: "10.140.77.19/19"}}, want: prefixes(t, "10.140.64.0/19")},
+		{
+			name:  "IPv6, empty and invalid subnets are skipped",
+			vnics: []imdsVNICMetadata{{SubnetCidrBlocks: []string{"fd23::/64", "garbage"}}, {SubnetCidrBlock: "10.140.64.0/19"}},
+			want:  prefixes(t, "10.140.64.0/19"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if diff := cmp.Diff(tt.want, parseVNICSubnets(tt.vnics), cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })); diff != "" {
+				t.Errorf("parseVNICSubnets() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestUnicastRoutePrefixes(t *testing.T) {
+	ipNet := func(cidr string) *net.IPNet {
+		ip, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Fatalf("ParseCIDR(%q) returned error: %v", cidr, err)
+		}
+		return &net.IPNet{IP: ip, Mask: ipNet.Mask}
+	}
+	routes := []netlink.Route{
+		{Type: unix.RTN_UNICAST, Dst: ipNet("10.140.64.0/19")},
+		{Type: unix.RTN_UNICAST, Dst: ipNet("10.140.131.213/32")},
+		// A 16-byte IPv4 address, as some netlink paths return it.
+		{Type: unix.RTN_UNICAST, Dst: &net.IPNet{IP: net.ParseIP("10.240.3.0"), Mask: net.CIDRMask(24, 32)}},
+		{Type: unix.RTN_UNICAST, Dst: ipNet("10.212.3.7/24")},
+		{Type: unix.RTN_UNICAST},
+		{Type: unix.RTN_UNICAST, Dst: ipNet("0.0.0.0/0")},
+		{Type: unix.RTN_UNICAST, Dst: ipNet("169.254.0.0/16")},
+		{Type: unix.RTN_LOCAL, Dst: ipNet("10.140.79.155/32")},
+		{Type: unix.RTN_BROADCAST, Dst: ipNet("10.140.95.255/32")},
+	}
+	want := prefixes(t, "10.140.64.0/19", "10.140.131.213/32", "10.240.3.0/24", "10.212.3.0/24", "0.0.0.0/0")
+	if diff := cmp.Diff(want, unicastRoutePrefixes(routes), cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })); diff != "" {
+		t.Errorf("unicastRoutePrefixes() mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// A failed read skips that part of the check; the other parts still run.
+func TestCheckChildRangeConflictsReadErrors(t *testing.T) {
+	fakeSysfs(t)
+	childRange := netip.MustParsePrefix("10.208.0.0/12")
+	instance := newOKEInstance(nil, nil)
+	instance.readVNICSubnets = func(context.Context) ([]netip.Prefix, error) { return nil, errors.New("IMDS is down") }
+	hostIPv4Routes = func() ([]netip.Prefix, error) { return nil, errors.New("dump interrupted") }
+	if err := instance.checkChildRangeConflicts(childRange); err != nil {
+		t.Fatalf("checkChildRangeConflicts() error = %v, want nil after read errors", err)
+	}
+	for _, host := range []string{"", "not-an-address", "10.96.0.1"} {
+		kubernetesServiceHost = func() string { return host }
+		if err := instance.checkChildRangeConflicts(childRange); err != nil {
+			t.Errorf("checkChildRangeConflicts() with service host %q error = %v, want nil", host, err)
+		}
+	}
+	kubernetesServiceHost = func() string { return "10.223.255.254" }
+	if err := instance.checkChildRangeConflicts(childRange); err == nil || !strings.Contains(err.Error(), "the Kubernetes service address 10.223.255.254 is inside") {
+		t.Errorf("checkChildRangeConflicts() error = %v, want the service address error after read errors", err)
+	}
+}
+
+// start wires the IMDS read, so each claim sees VNICs attached after startup.
+// The RDMA NICs of one claim share one read, also a failed one.
+func TestStartReadsVNICSubnetsPerClaim(t *testing.T) {
+	fakeSysfs(t)
+	fakeInterface(t, "rdma0", "0000:0c:00.0", unix.ARPHRD_ETHER)
+	requests := newRDMANodeRequests()
+	server := rdmaNodeServer(t, requests, serveVNIC,
+		func(w http.ResponseWriter) { http.Error(w, "busy", http.StatusServiceUnavailable) },
+		func(w http.ResponseWriter) {
+			_, _ = w.Write([]byte(`[{"privateIp":"10.140.77.19","subnetCidrBlock":"10.140.64.0/19"},{"privateIp":"10.140.200.171","subnetCidrBlock":"10.140.128.0/17"}]`))
+		},
+	)
+
+	instance := newOKEInstance(nil, nil)
+	instance.initialRetryInterval = time.Millisecond
+	instance.initialWait = time.Second
+	instance.refreshInterval = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if _, err := instance.start(ctx, server.Client(), server.URL); err != nil {
+		t.Fatalf("start() returned error: %v", err)
+	}
+	read := func(maxAge time.Duration, wantRequests int64, wantErr bool, want ...string) {
+		t.Helper()
+		instance.vnicSubnetsMaxAge = maxAge
+		got, err := instance.readVNICSubnets(ctx)
+		if (err != nil) != wantErr {
+			t.Fatalf("readVNICSubnets() error = %v, want error %v", err, wantErr)
+		}
+		if diff := cmp.Diff(prefixes(t, want...), got, cmp.Comparer(func(a, b netip.Prefix) bool { return a == b })); diff != "" {
+			t.Errorf("readVNICSubnets() mismatch (-want +got):\n%s", diff)
+		}
+		if got := requests["/vnics/"].Load(); got != wantRequests {
+			t.Errorf("vnics endpoint requested %d times, want %d", got, wantRequests)
+		}
+	}
+	// Startup read the primary VNIC once, so the first claim check is request 2.
+	read(time.Hour, 2, true)
+	read(time.Hour, 2, true)
+	read(0, 3, false, "10.140.64.0/19", "10.140.128.0/17")
+	read(time.Hour, 3, false, "10.140.64.0/19", "10.140.128.0/17")
 }

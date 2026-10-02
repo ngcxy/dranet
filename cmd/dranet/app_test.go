@@ -19,10 +19,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -205,5 +207,29 @@ func TestSetupProvidersCKS(t *testing.T) {
 	}
 	if profileProvider != nil {
 		t.Fatalf("setupProviders() profile provider = %T, want nil", profileProvider)
+	}
+}
+
+func TestStringList(t *testing.T) {
+	var list stringList
+	flags := flag.NewFlagSet("dranet", flag.ContinueOnError)
+	flags.Var(&list, "cloud-provider-options", "")
+	// Set does no checks, so a malformed value still reaches the flag dump.
+	args := []string{"--cloud-provider-options=oke.a=1,2", "--cloud-provider-options=not a pair"}
+	if err := flags.Parse(args); err != nil {
+		t.Fatalf("Parse(%q) error = %v", args, err)
+	}
+	want := stringList{"oke.a=1,2", "not a pair"}
+	if diff := cmp.Diff(want, list); diff != "" {
+		t.Errorf("Parse(%q) mismatch (-want +got):\n%s", args, diff)
+	}
+
+	for _, tc := range []struct{ one, two stringList }{
+		{one: stringList{"a.x=hello a.y=world"}, two: stringList{"a.x=hello", "a.y=world"}},
+		{one: stringList{"a.x=1,a.y=2"}, two: stringList{"a.x=1", "a.y=2"}},
+	} {
+		if tc.one.String() == tc.two.String() {
+			t.Errorf("String() = %s for both %q and %q", tc.one.String(), []string(tc.one), []string(tc.two))
+		}
 	}
 }

@@ -55,19 +55,20 @@ const (
 )
 
 var (
-	hostnameOverride  string
-	kubeconfig        string
-	bindAddress       string
-	celExpression     string
-	dbPath            string
-	minPollInterval   time.Duration
-	maxPollInterval   time.Duration
-	pollBurst         int
-	moveIBInterfaces  bool
-	cloudProviderHint string
-	profileProvider   string
-	webhookURL        string
-	featureGates      string
+	hostnameOverride     string
+	kubeconfig           string
+	bindAddress          string
+	celExpression        string
+	dbPath               string
+	minPollInterval      time.Duration
+	maxPollInterval      time.Duration
+	pollBurst            int
+	moveIBInterfaces     bool
+	cloudProviderHint    string
+	profileProvider      string
+	webhookURL           string
+	featureGates         string
+	cloudProviderOptions stringList
 
 	kubeletRootDir string
 
@@ -89,6 +90,7 @@ func init() {
 	flag.StringVar(&webhookURL, "webhook-url", "", "URL for the webhook provider (required if using webhook for either provider)")
 	flag.StringVar(&kubeletRootDir, "kubelet-root-dir", "/var/lib/kubelet", "The kubelet data directory (its --root-dir). The driver's registration socket lives under <dir>/plugins_registry and its dra.sock under <dir>/plugins/<driver-name>. Set this to match the kubelet --root-dir on clusters that relocate it.")
 	flag.StringVar(&featureGates, "feature-gates", "", "A set of key=value pairs that describe feature gates for alpha/experimental features.")
+	flag.Var(&cloudProviderOptions, "cloud-provider-options", "A <provider>.<option>=<value> pair for a cloud provider. Repeat the flag for each option. Values can contain commas. The options of a provider apply only when that provider runs. Values must not contain secrets; flags are logged.")
 
 	flag.Usage = func() {
 		fmt.Fprint(os.Stderr, "Usage: dranet [options]\n\n")
@@ -110,6 +112,19 @@ func main() {
 	flag.VisitAll(func(f *flag.Flag) {
 		klog.Infof("FLAG: --%s=%q", f.Name, f.Value)
 	})
+
+	// Check after the flag dump, so the log shows the flags, and before
+	// creating the Kubernetes client, so an invalid option fails even outside
+	// a cluster, where the client would fail first.
+	cloudOptions, optionsErr := discovery.ParseProviderOptions(cloudProviderOptions)
+	if optionsErr != nil {
+		klog.Fatalf("invalid --cloud-provider-options: %v", optionsErr)
+	}
+	if cloudProviderHint != "" {
+		if err := cloudOptions.CheckHint(discovery.CloudProviderHint(cloudProviderHint)); err != nil {
+			klog.Fatal(err)
+		}
+	}
 
 	mux := http.NewServeMux()
 	// Add healthz handler
@@ -204,6 +219,7 @@ func main() {
 			NodeClient:        clientset.CoreV1().Nodes(),
 			NodeName:          nodeName,
 			ReservedAddresses: store.GetInUseSubinterfaceIPs(),
+			ProviderOptions:   cloudOptions,
 		},
 	}
 	cloudInst, profProv, err := setupProviders(ctx, providerOpts)
@@ -261,6 +277,19 @@ func printVersion() {
 		}
 	}
 	klog.Infof("dranet go %s build: %s time: %s", info.GoVersion, vcsRevision, vcsTime)
+}
+
+// stringList collects every occurrence of a repeatable flag. Set does no
+// checks, so a bad value cannot stop DRANET before the flag dump.
+type stringList []string
+
+// String quotes each value, so the flag dump can tell one value with a comma
+// or a space from two values.
+func (l *stringList) String() string { return fmt.Sprintf("%q", []string(*l)) }
+
+func (l *stringList) Set(value string) error {
+	*l = append(*l, value)
+	return nil
 }
 
 type providerOptions struct {

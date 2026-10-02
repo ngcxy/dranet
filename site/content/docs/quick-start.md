@@ -56,6 +56,8 @@ You can install the latest stable version of `DRANET` using the provided manifes
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/dranet/refs/heads/main/install.yaml
 ```
 
+To set options of a cloud provider with `--cloud-provider-options`, see [Cloud provider options](https://github.com/kubernetes-sigs/dranet/blob/main/deployments/helm/dranet/README.md#cloud-provider-options) in the Helm chart README.
+
 ### How to use it
 
 Once the Kubernetes Network Driver is running you can see the list of Network Interfaces and its attributes published by the drivers using `kubectl get resourceslices -o yaml`:

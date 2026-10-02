@@ -28,6 +28,9 @@ args: {}
 #  inventoryPollBurst: 5
 #  moveIBInterfaces: true
 #  cloudProviderHint: ""
+#  cloudProviderOptions:
+#    oke:
+#      rdma-child-ipv4-cidr: "10.192.0.0/14"
 #  profileProvider: "cloud"
 #  webhookURL: ""
 #  featureGates: ""
