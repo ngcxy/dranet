@@ -1,4 +1,4 @@
-{{- if and (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") .Values.prometheus.monitor.enabled }}
+{{- if and (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor") .Values.prometheus.monitor.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -16,7 +16,7 @@ spec:
   podMetricsEndpoints:
     - port: metrics
       path: /metrics
-      interval: {{ .Values.prometheus.monitor.interval }}
+      interval: {{ .Values.prometheus.monitor.interval | quote }}
       relabelings:
         - sourceLabels: [__meta_kubernetes_pod_node_name]
           targetLabel: node

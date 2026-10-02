@@ -66,12 +66,20 @@ When `args.profileProvider` or `args.cloudProviderHint` is `webhook`, set
 `args.webhookURL` to the webhook endpoint.
 
 `prometheus.monitor.enabled` creates a PodMonitor for Prometheus Operator
-to scrape. The template checks for the `monitoring.coreos.com/v1` CRD via
-`.Capabilities.APIVersions` before rendering, so setting it to `true` on a
-cluster without Prometheus Operator installed is a silent no-op rather than
-a failed `helm install`. Metrics remain scrapable without it via
-annotation-based discovery, e.g. by setting `podAnnotations` to
-`prometheus.io/scrape: "true"` and `prometheus.io/port: "9177"`.
+to scrape. The template checks for the `monitoring.coreos.com/v1/PodMonitor`
+CRD via `.Capabilities.APIVersions` before rendering, so setting it to `true`
+on a cluster without that CRD installed is a silent no-op rather than a
+failed `helm install`. `helm install`/`helm upgrade` populate this check from
+the live cluster automatically; a plain offline `helm template` does not --
+pass `--api-versions monitoring.coreos.com/v1/PodMonitor` to simulate it there.
+
+Metrics remain scrapable without the CRD via annotation-based discovery
+instead: set `podAnnotations` to `prometheus.io/scrape: "true"` and
+`prometheus.io/port: "9177"`. This only works if your Prometheus is actually
+configured with a scrape config that reads `prometheus.io/*` annotations --
+unlike the PodMonitor path, nothing here wires that up automatically. Keep
+`prometheus.io/port` in sync with `metricsPort` if you change it from the
+default.
 
 `extraVolumes` and `extraVolumeMounts` add entries after the built-in volumes
 and container mounts. The chart does not change the entries. Do not reuse the
