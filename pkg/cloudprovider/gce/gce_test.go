@@ -313,7 +313,7 @@ func testGetProfileConfig_Namespaced(t *testing.T) {
 			iface:       metadataIPv6Iface,
 			config:      ipvlanConfig(),
 			wantAddrs:   1,
-			wantRange:   "fd36:0:4:2047:cc0:de00::/88",
+			wantRange:   "fd36:0:4:2047:c00:c0de::/96",
 			wantGateway: "fe80::1",
 		},
 		{
@@ -324,7 +324,7 @@ func testGetProfileConfig_Namespaced(t *testing.T) {
 			iface:       metadataIPv6Iface,
 			config:      ipvlanConfig(),
 			wantAddrs:   1,
-			wantRange:   "fd36:0:4:2047:10c0:de00::/88",
+			wantRange:   "fd36:0:4:2047:1000:c0de::/96",
 			wantGateway: "fe80::99",
 		},
 		{
@@ -487,8 +487,18 @@ func TestGetIPv6Range(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name:      "unaligned prefix /72 keeps its last group intact",
+			baseIPStr: "fd36:0:6:2018:c00::/72",
+			want:      "fd36:0:6:2018:c00:c0de::/96",
+		},
+		{
 			name:      "too large CIDR prefix /112",
 			baseIPStr: "2001:db8:1234:5678:abcd:ef01:2345::/112",
+			wantErr:   true,
+		},
+		{
+			name:      "unaligned prefix /100 rounds up past the limit",
+			baseIPStr: "2001:db8:1234:5678:abcd:ef01:2000::/100",
 			wantErr:   true,
 		},
 		{

@@ -259,7 +259,8 @@ func getNICIPv6Prefix(ifName string) ([]string, error) {
 		if !addr.IP.IsGlobalUnicast() {
 			continue
 		}
-		if ones, bits := addr.Mask.Size(); bits != 128 || ones/8 >= 14 {
+		// getIPv6Range needs room for the marker group plus host bits.
+		if ones, bits := addr.Mask.Size(); bits != 128 || ones > 96 {
 			continue
 		}
 		prefix := &net.IPNet{IP: addr.IP.Mask(addr.Mask), Mask: addr.Mask}
@@ -489,7 +490,8 @@ func getIPv6Range(baseIPStr string) (string, error) {
 	}
 
 	workerIP := make(net.IP, 16)
-	numBaseBytes := prefixLen / 8
+	// Round up to whole 16-bit groups so the marker doesn't share a group with the prefix.
+	numBaseBytes := (prefixLen + 15) / 16 * 2
 
 	if numBaseBytes >= 14 {
 		return "", fmt.Errorf("prefix length %d is too large to append %x", prefixLen, workerMarker)
